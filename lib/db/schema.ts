@@ -1,20 +1,19 @@
-// Type definitions for our database
 export interface Symptom {
   id: string;
   name: string;
-  severity: number;  // 0-10
-  timestamp: Date;   // Use Date, not string
+  severity: number;
+  timestamp: string;  // Changed from Date to string
   notes?: string;
   tags?: string[];
 }
 
 export interface UserPreferences {
-  id: 'preferences';  // Singleton
+  id: string;
   favoriteSymptoms: string[];
   recentSymptoms: string[];
   defaultSeverity: number;
   streakCount: number;
-  lastLogDate?: string;  // ISO string for date comparison
+  lastLogDate?: string;
 }
 
 export interface Template {

@@ -1,41 +1,56 @@
-import { QuickLog } from '@/app/components/QuickLog-Simple';
-import { Button } from '@/components/ui/button';
-import { FileText, History, Settings } from 'lucide-react';
-import { Toaster } from 'sonner';
+'use client';
+
+import { useState } from 'react';
+import dynamic from 'next/dynamic';
+import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
+import { LogTab } from './components/LogTab';
+import { History } from './components/History';
+import { ReportGenerator } from './components/ReportGenerator';
+import { ThemeToggle } from './components/ThemeToggle';
+import { toast } from 'sonner';
+
+const Charts = dynamic(() => import('./components/Charts').then(m => m.Charts), {
+  ssr: false,
+});
 
 export default function HomePage() {
+  const [activeTab, setActiveTab] = useState<'log' | 'history' | 'charts'>('log');
+
+  const handleStartEdit = () => {
+    setActiveTab('log');
+    toast('Editing entry', { description: 'Loaded into Quick Log' });
+  };
+
   return (
-    <div className="min-h-screen bg-gradient-to-b from-gray-50 to-white">
-      <Toaster position="top-center" richColors closeButton />
-      
-      <div className="max-w-md mx-auto p-4 pt-8">
-        <div className="text-center mb-8">
-          <h1 className="text-3xl font-bold mb-2">myHealthyAgent</h1>
-          <p className="text-gray-600">Track symptoms in 7 seconds</p>
+    <div className="min-h-screen bg-gradient-to-br from-blue-50 to-indigo-100 dark:from-gray-900 dark:to-gray-800">
+      <div className="max-w-md mx-auto p-4">
+        <div className="flex items-center justify-between mb-6">
+          <h1 className="text-2xl font-bold">myHealthyAgent</h1>
+          <ThemeToggle />
         </div>
 
-        <QuickLog />
+        <Tabs value={activeTab} onValueChange={(v) => setActiveTab(v as any)}>
+          <TabsList className="grid w-full grid-cols-3">
+            <TabsTrigger value="log">Log</TabsTrigger>
+            <TabsTrigger value="history">History</TabsTrigger>
+            <TabsTrigger value="charts">Charts</TabsTrigger>
+          </TabsList>
 
-        <div className="mt-8 space-y-3">
-          <Button variant="outline" className="w-full h-14 justify-start" disabled>
-            <FileText className="mr-3 h-5 w-5" />
-            Generate Report (Day 3)
-          </Button>
-          
-          <Button variant="outline" className="w-full h-14 justify-start" disabled>
-            <History className="mr-3 h-5 w-5" />
-            View History (Day 2)
-          </Button>
-          
-          <Button variant="outline" className="w-full h-14 justify-start" disabled>
-            <Settings className="mr-3 h-5 w-5" />
-            Settings (Day 4)
-          </Button>
-        </div>
+          <TabsContent value="log">
+            <LogTab />
+          </TabsContent>
 
-        <div className="mt-12 text-center text-sm text-gray-500">
-          <p>Your data stays on this device</p>
-          <p className="mt-1">No account needed • 100% private</p>
+          <TabsContent value="history">
+            <History onStartEdit={handleStartEdit} />
+          </TabsContent>
+
+          <TabsContent value="charts">
+            <Charts />
+          </TabsContent>
+        </Tabs>
+
+        <div className="mt-6">
+          <ReportGenerator />
         </div>
       </div>
     </div>

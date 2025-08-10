@@ -6,16 +6,10 @@ import { Card } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
 import { toast } from 'sonner';
 import { Plus, TrendingUp, ChevronDown, Repeat } from 'lucide-react';
-import {
-  addSymptom,
-  getPreferences,
-  savePreferences,
-  getYesterdaysSymptoms,
-  getStreak,
-} from '@/lib/db/client';
+import { db } from '@/lib/db/client';
 import { getSeverityLabel, getSeverityColor } from '@/lib/utils';
 
-export function QuickLog() {
+export function QuickLog({ templateData, onTemplateUsed }: any) {
   const [isOpen, setIsOpen] = useState(false);
   const [favoriteSymptoms, setFavoriteSymptoms] = useState<string[]>([]);
   const [selectedSymptoms, setSelectedSymptoms] = useState<string[]>([]);
@@ -30,12 +24,24 @@ export function QuickLog() {
     loadInitialData();
   }, []);
 
+  // Template data handler
+  useEffect(() => {
+    if (templateData) {
+      setSelectedSymptoms(templateData.symptoms);
+      setSeverity(templateData.severity);
+      setIsOpen(true);
+      if (onTemplateUsed) onTemplateUsed();
+    }
+  }, [templateData, onTemplateUsed]);
+
   async function loadInitialData() {
     try {
-      const prefs = await getPreferences();
-      setFavoriteSymptoms(prefs.favoriteSymptoms);
-      setSeverity(prefs.defaultSeverity);
-      const currentStreak = await getStreak();
+      const prefs = await db.getPreferences();
+      if (prefs) {
+        setFavoriteSymptoms(prefs.favoriteSymptoms);
+        setSeverity(prefs.defaultSeverity);
+      }
+      const currentStreak = await db.updateStreak();
       setStreak(currentStreak);
     } catch (error) {
       console.error('Failed to load initial data:', error);
@@ -61,226 +67,182 @@ export function QuickLog() {
 
     try {
       for (const name of selectedSymptoms) {
-        await addSymptom({
+        await db.addSymptom({
+          id: crypto.randomUUID(),
           name,
           severity,
-          timestamp: new Date(),
-          notes: notes || undefined,
+          timestamp: new Date().toISOString(),
+          notes: notes || undefined
         });
       }
 
-      const newStreak = await getStreak();
-      setStreak(newStreak);
+      const endTime = performance.now();
+      const timeTaken = ((endTime - startTime) / 1000).toFixed(1);
 
-      const timeTaken = ((performance.now() - startTime) / 1000).toFixed(1);
-      toast.success(`Logged in ${timeTaken}s! 🚀`, {
-        description: `${selectedSymptoms.join(', ')} • Severity ${severity}/10`,
-      });
-
+      toast.success(`Logged in ${timeTaken}s! 🚀`);
+      
       setSelectedSymptoms([]);
-      setSeverity(4);
       setNotes('');
       setIsOpen(false);
+      
+      const newStreak = await db.updateStreak();
+      setStreak(newStreak);
     } catch (error) {
-      console.error('Failed to log symptoms:', error);
       toast.error('Failed to save symptoms');
+      console.error(error);
     } finally {
       setIsLogging(false);
     }
   }
 
   async function repeatYesterday() {
-    setIsLogging(true);
     try {
-      const yesterdaysSymptoms = await getYesterdaysSymptoms();
-      if (yesterdaysSymptoms.length === 0) {
-        toast.error('No symptoms found for yesterday');
+      const yesterday = await db.getYesterdaysSymptoms();
+      if (yesterday.length === 0) {
+        toast.error('No symptoms logged yesterday');
         return;
       }
 
-      const symptomMap = new Map<string, number>();
-      yesterdaysSymptoms.forEach(s => {
-        const current = symptomMap.get(s.name) || 0;
-        symptomMap.set(s.name, Math.max(current, s.severity));
-      });
-
-      for (const [name, maxSeverity] of symptomMap.entries()) {
-        await addSymptom({
-          name,
-          severity: maxSeverity,
-          timestamp: new Date(),
-          notes: 'Repeated from yesterday',
+      for (const symptom of yesterday) {
+        await db.addSymptom({
+          id: crypto.randomUUID(),
+          name: symptom.name,
+          severity: symptom.severity,
+          timestamp: new Date().toISOString(),
+          notes: symptom.notes
         });
       }
 
-      toast.success(`Repeated ${symptomMap.size} symptom(s) from yesterday`);
+      toast.success(`Repeated ${yesterday.length} symptoms from yesterday`);
       setIsOpen(false);
-      const newStreak = await getStreak();
+      
+      const newStreak = await db.updateStreak();
       setStreak(newStreak);
     } catch (error) {
-      console.error('Failed to repeat yesterday:', error);
-      toast.error('Failed to repeat yesterday\'s symptoms');
-    } finally {
-      setIsLogging(false);
+      toast.error('Failed to repeat yesterday');
+      console.error(error);
     }
   }
 
-  return (
-    <div className="space-y-4">
-      {streak > 0 && (
-        <div className="text-center">
-          <div className="inline-flex items-center gap-2 px-4 py-2 bg-gradient-to-r from-blue-50 to-indigo-50 rounded-full">
-            <TrendingUp className="h-4 w-4 text-blue-600" />
-            <span className="font-semibold text-blue-900">{streak}-day streak!</span>
-          </div>
-        </div>
-      )}
+  const commonSymptoms = ['Headache', 'Fatigue', 'Nausea', 'Pain', 'Insomnia'];
 
+  return (
+    <div className="w-full space-y-4">
       <Button
-        className="w-full h-20 text-xl font-semibold shadow-lg hover:shadow-xl transition-all"
         onClick={() => setIsOpen(!isOpen)}
-        disabled={isLogging}
+        size="lg"
+        className="w-full h-16 text-xl"
       >
-        {isOpen ? (
-          <>
-            <ChevronDown className="mr-2 h-6 w-6" />
-            Close Quick Log
-          </>
-        ) : (
-          <>
-            <Plus className="mr-2 h-6 w-6" />
-            Log Symptoms
-          </>
-        )}
+        Log Symptoms
       </Button>
 
       {isOpen && (
-        <Card className="p-6 space-y-6 animate-in slide-in-from-top duration-300">
-          <h2 className="text-lg font-semibold">Quick Log</h2>
+        <Card className="p-6 animate-in slide-in-from-top">
+          <h2 className="text-xl font-semibold mb-4">Quick Log</h2>
 
-          <div>
-            <label className="text-sm font-medium text-gray-700 mb-2 block">
-              Select symptoms:
-            </label>
-            <div className="flex flex-wrap gap-2">
-              {favoriteSymptoms.map(symptom => (
-                <Button
-                  key={symptom}
-                  type="button"
-                  variant={selectedSymptoms.includes(symptom) ? 'default' : 'outline'}
-                  size="sm"
-                  className="rounded-full"
-                  onClick={() => toggleSymptom(symptom)}
-                >
-                  {symptom}
-                </Button>
-              ))}
-              
-              {!showCustomInput ? (
-                <Button
-                  type="button"
-                  variant="outline"
-                  size="sm"
-                  className="rounded-full"
-                  onClick={() => setShowCustomInput(true)}
-                >
-                  <Plus className="h-3 w-3" />
-                </Button>
-              ) : (
-                <div className="flex gap-1">
-                  <Input
-                    placeholder="Add symptom..."
-                    value={customSymptom}
-                    onChange={(e) => setCustomSymptom(e.target.value)}
-                    onKeyPress={(e) => {
-                      if (e.key === 'Enter' && customSymptom.trim()) {
-                        const trimmed = customSymptom.trim();
-                        toggleSymptom(trimmed);
-                        if (!favoriteSymptoms.includes(trimmed)) {
-                          const updated = [trimmed, ...favoriteSymptoms].slice(0, 8);
-                          setFavoriteSymptoms(updated);
-                          savePreferences({ favoriteSymptoms: updated });
-                        }
-                        setCustomSymptom('');
-                        setShowCustomInput(false);
-                      }
-                    }}
-                    className="h-8 w-32"
-                    autoFocus
-                  />
-                </div>
-              )}
-            </div>
+          <div className="flex flex-wrap gap-2 mb-6">
+            {commonSymptoms.map(symptom => (
+              <Button
+                key={symptom}
+                variant={selectedSymptoms.includes(symptom) ? 'default' : 'outline'}
+                size="sm"
+                onClick={() => toggleSymptom(symptom)}
+                className="rounded-full"
+              >
+                {symptom}
+              </Button>
+            ))}
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => setShowCustomInput(!showCustomInput)}
+              className="rounded-full"
+            >
+              <Plus className="h-3 w-3" />
+            </Button>
           </div>
 
-          <div>
+          {showCustomInput && (
+            <Input
+              placeholder="Add custom symptom"
+              value={customSymptom}
+              onChange={(e) => setCustomSymptom(e.target.value)}
+              onKeyPress={(e) => {
+                if (e.key === 'Enter' && customSymptom) {
+                  toggleSymptom(customSymptom);
+                  setCustomSymptom('');
+                  setShowCustomInput(false);
+                }
+              }}
+              className="mb-4"
+              autoFocus
+            />
+          )}
+
+          <div className="mb-6">
             <div className="flex justify-between mb-2">
-              <label className="text-sm font-medium text-gray-700">Severity</label>
-              <span className={`text-sm font-bold ${getSeverityColor(severity)}`}>
-                {severity}/10 - {getSeverityLabel(severity)}
-              </span>
+              <label className="text-sm font-medium">Severity</label>
+              <span className="text-sm font-medium">{severity}/10</span>
             </div>
-            
-            {/* SIMPLE INLINE STYLED SLIDER - THIS WILL WORK */}
             <input
               type="range"
               min="0"
               max="10"
-              step="1"
               value={severity}
-              onChange={(e) => setSeverity(parseInt(e.target.value))}
+              onChange={(e) => setSeverity(Number(e.target.value))}
+              className="w-full"
               style={{
-                width: '100%',
-                height: '8px',
-                background: '#e5e7eb',
-                borderRadius: '4px',
-                outline: 'none',
-                opacity: 1,
-                WebkitAppearance: 'none',
-                MozAppearance: 'none',
-                cursor: 'pointer'
+                background: `linear-gradient(to right, #3b82f6 0%, #3b82f6 ${severity * 10}%, #e5e7eb ${severity * 10}%, #e5e7eb 100%)`
               }}
             />
-            
             <div className="flex justify-between text-xs text-gray-500 mt-1">
-              <span>None</span>
-              <span>Mild</span>
-              <span>Moderate</span>
-              <span>Severe</span>
-              <span>Critical</span>
+              <span>0</span>
+              <span>10</span>
             </div>
           </div>
 
-          <div>
-            <label className="text-sm font-medium text-gray-700 mb-2 block">
-              Notes (optional):
-            </label>
-            <Input
-              placeholder="Any additional details..."
-              value={notes}
-              onChange={(e) => setNotes(e.target.value)}
-            />
-          </div>
+          <Input
+            placeholder="Add a note (optional)"
+            value={notes}
+            onChange={(e) => setNotes(e.target.value)}
+            className="mb-6"
+          />
 
-          <div className="grid grid-cols-2 gap-2">
-            <Button
-              type="button"
-              variant="outline"
-              onClick={repeatYesterday}
-              disabled={isLogging}
-            >
-              <Repeat className="mr-2 h-4 w-4" />
-              Repeat Yesterday
-            </Button>
+          <div className="space-y-2">
             <Button
               onClick={handleSave}
-              disabled={isLogging || selectedSymptoms.length === 0}
+              className="w-full"
+              disabled={selectedSymptoms.length === 0 || isLogging}
             >
-              {isLogging ? 'Saving...' : 'Save'}
+              Save
+            </Button>
+            <Button
+              onClick={repeatYesterday}
+              variant="outline"
+              className="w-full"
+            >
+              <Repeat className="h-4 w-4 mr-2" />
+              Repeat Yesterday
             </Button>
           </div>
         </Card>
       )}
+
+      <div className="text-center py-4">
+        <p className="text-2xl font-bold">{streak}-day streak!</p>
+        <div className="w-full bg-gray-200 rounded-full h-2 mt-2">
+          <div
+            className="bg-blue-600 h-2 rounded-full transition-all"
+            style={{ width: `${Math.min(streak * 10, 100)}%` }}
+          />
+        </div>
+      </div>
+
+      <p className="text-center text-sm text-gray-500">
+        Your data stays on this device
+      </p>
     </div>
   );
 }
+
+export default QuickLog;
