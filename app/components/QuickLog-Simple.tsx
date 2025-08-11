@@ -9,7 +9,7 @@ import { Plus, TrendingUp, ChevronDown, Repeat } from 'lucide-react';
 import { db } from '@/lib/db/client';
 import { getSeverityLabel, getSeverityColor } from '@/lib/utils';
 
-export function QuickLog({ templateData, onTemplateUsed }: any) {
+export function QuickLog({ templateData, onTemplateUsed }: { templateData?: { symptoms: string[]; severity: number } | null; onTemplateUsed?: () => void }) {
   const [isOpen, setIsOpen] = useState(false);
   const [favoriteSymptoms, setFavoriteSymptoms] = useState<string[]>([]);
   const [selectedSymptoms, setSelectedSymptoms] = useState<string[]>([]);

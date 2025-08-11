@@ -3,6 +3,8 @@ import { Inter } from 'next/font/google';
 import './globals.css';
 import { Providers } from './providers';
 import { Toaster } from 'sonner';
+import ServiceWorkerProvider from './components/ServiceWorkerProvider';
+import { OfflineIndicator } from './components/OfflineIndicator';
 
 const inter = Inter({ subsets: ['latin'] });
 
@@ -20,6 +22,8 @@ export default function RootLayout({
     <html lang="en" suppressHydrationWarning>
       <body className={inter.className}>
         <Providers>
+          <ServiceWorkerProvider />
+          <OfflineIndicator />
           {children}
           <Toaster position="top-center" />
         </Providers>

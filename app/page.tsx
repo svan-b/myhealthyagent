@@ -8,6 +8,7 @@ import { History } from './components/History';
 import { ReportGenerator } from './components/ReportGenerator';
 import { ThemeToggle } from './components/ThemeToggle';
 import { toast } from 'sonner';
+import { InstallPrompt} from '.components/Install';
 
 const Charts = dynamic(() => import('./components/Charts').then(m => m.Charts), {
   ssr: false,
@@ -29,7 +30,7 @@ export default function HomePage() {
           <ThemeToggle />
         </div>
 
-        <Tabs value={activeTab} onValueChange={(v) => setActiveTab(v as any)}>
+        <Tabs value={activeTab} onValueChange={(v) => setActiveTab(v as "log" | "history" | "charts")}>
           <TabsList className="grid w-full grid-cols-3">
             <TabsTrigger value="log">Log</TabsTrigger>
             <TabsTrigger value="history">History</TabsTrigger>
@@ -48,6 +49,7 @@ export default function HomePage() {
             <Charts />
           </TabsContent>
         </Tabs>
+        <InstallPrompt />
 
         <div className="mt-6">
           <ReportGenerator />

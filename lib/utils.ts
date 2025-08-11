@@ -41,7 +41,7 @@ export function getSeverityColor(value: number): string {
 }
 
 // Debug helper for development
-export function debugLog(message: string, data?: any) {
+export function debugLog(message: string, data?: unknown) {
   if (process.env.NODE_ENV === 'development') {
     console.log(`[DEBUG] ${message}`, data || '');
   }
