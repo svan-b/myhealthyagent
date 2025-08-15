@@ -22,3 +22,11 @@ export interface Template {
   symptoms: string[];
   defaultSeverity: number;
 }
+
+export interface MedLog {
+  id: string;
+  name: string;
+  timestamp: string;  // ISO string, consistent with Symptom
+  dose?: string;      // e.g., "50mg", "2 tablets"
+  notes?: string;     // e.g., "with food", "missed dose"
+}

@@ -1,3 +1,4 @@
+// app/page.tsx
 'use client';
 
 import { useState } from 'react';
@@ -7,8 +8,11 @@ import { LogTab } from './components/LogTab';
 import { History } from './components/History';
 import { ReportGenerator } from './components/ReportGenerator';
 import { ThemeToggle } from './components/ThemeToggle';
+import { InstallPrompt } from './components/InstallPrompt';
+import { VisitReport } from './components/VisitReport';
+import { ExportButtons } from './components/ExportButtons';
+import { DeleteDataButton } from './components/DeleteDataButton';
 import { toast } from 'sonner';
-import { InstallPrompt} from '.components/Install';
 
 const Charts = dynamic(() => import('./components/Charts').then(m => m.Charts), {
   ssr: false,
@@ -16,12 +20,12 @@ const Charts = dynamic(() => import('./components/Charts').then(m => m.Charts), 
 
 export default function HomePage() {
   const [activeTab, setActiveTab] = useState<'log' | 'history' | 'charts'>('log');
-
+  
   const handleStartEdit = () => {
     setActiveTab('log');
     toast('Editing entry', { description: 'Loaded into Quick Log' });
   };
-
+  
   return (
     <div className="min-h-screen bg-gradient-to-br from-blue-50 to-indigo-100 dark:from-gray-900 dark:to-gray-800">
       <div className="max-w-md mx-auto p-4">
@@ -29,31 +33,43 @@ export default function HomePage() {
           <h1 className="text-2xl font-bold">myHealthyAgent</h1>
           <ThemeToggle />
         </div>
-
+        
         <Tabs value={activeTab} onValueChange={(v) => setActiveTab(v as "log" | "history" | "charts")}>
           <TabsList className="grid w-full grid-cols-3">
             <TabsTrigger value="log">Log</TabsTrigger>
             <TabsTrigger value="history">History</TabsTrigger>
             <TabsTrigger value="charts">Charts</TabsTrigger>
           </TabsList>
-
+          
           <TabsContent value="log">
             <LogTab />
           </TabsContent>
-
+          
           <TabsContent value="history">
             <History onStartEdit={handleStartEdit} />
           </TabsContent>
-
+          
           <TabsContent value="charts">
             <Charts />
           </TabsContent>
         </Tabs>
+        
         <InstallPrompt />
-
-        <div className="mt-6">
-          <ReportGenerator />
+        
+        {/* Report and Export Actions */}
+        <div className="mt-6 space-y-3">
+          <div className="flex gap-2">
+            <VisitReport />
+            <ReportGenerator />
+          </div>
+          <ExportButtons />
+          <DeleteDataButton />
         </div>
+        
+        {/* Privacy notice */}
+        <p className="text-center text-sm text-gray-500 mt-4">
+          Your data stays on this device
+        </p>
       </div>
     </div>
   );

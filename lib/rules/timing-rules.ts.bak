@@ -1,0 +1,451 @@
+// lib/rules/timing-rules.ts
+// MVP → Future-proof rules engine:
+// - Declarative rules (can move to JSON/DB later)
+// - Canonical concept IDs with synonym resolution (ready for RxNorm/DIN/NPN)
+// - Generic evaluator with precise time windows
+// - Hints include machine-readable metadata for audits & UI
+
+import type { Symptom, MedLog } from '@/lib/db/schema';
+import {
+  differenceInMinutes,
+  isWithinInterval,
+  addHours,
+} from 'date-fns';
+
+/* --------------------------------- Types --------------------------------- */
+
+export interface TimingHint {
+  title: string;
+  message: string;
+  confidence: 'High' | 'Medium' | 'Low';
+  type: 'medication' | 'food' | 'lifestyle';
+  educational: boolean; // MVP guardrail
+  meta?: {
+    ruleId: string;
+    windowHours?: [number, number];
+    concepts?: string[];      // canonical IDs involved
+    evidenceCount?: number;   // future: occurrences in logs
+    version?: string;         // ruleset version
+  };
+}
+
+export interface EvaluationContext {
+  recentSymptoms: Symptom[];   // not yet used deeply (Day 4), but kept for future
+  recentMeds: MedLog[];        // same
+  currentTags?: string[];      // user-tagged foods/behaviors for "now"
+  currentMed?: string;         // med user is about to take / just logged
+  now?: Date;                  // injectable clock for testability
+}
+
+type ConceptType = 'med' | 'nutrient' | 'food' | 'class';
+
+interface Concept {
+  id: string;                   // canonical ID
+  type: ConceptType;
+  names: string[];              // synonyms/brands/common names
+  codes?: {
+    rxnorm?: string[];          // future
+    din?: string[];             // future (Canada)
+    npn?: string[];             // future (Natural Product Number)
+  };
+}
+
+export interface TimingRuleDescriptor {
+  id: string;
+  name: string;
+  title: string;
+  message: (params: {
+    window?: [number, number];
+    subjectName?: string;
+  }) => string;
+  type: 'medication' | 'food' | 'lifestyle';
+  // What must be present/absent around "now"
+  mode: 'cooccur' | 'absence-of-helper';
+  subjectConcepts: string[];      // concept IDs
+  antagonistConcepts?: string[];  // concept IDs to avoid together/nearby
+  windowHours?: [number, number]; // e.g., [0, 2]
+  baseConfidence: 'High' | 'Medium' | 'Low';
+}
+
+/* ------------------------------ Normalization ---------------------------- */
+
+const norm = (s: string) =>
+  (s || '')
+    .toLowerCase()
+    .normalize('NFKD')
+    .replace(/\p{Diacritic}/gu, '')
+    .trim();
+
+// Word-boundary check to avoid "iron" matching "ironic"
+const hasWord = (hay: string, needle: string) =>
+  new RegExp(`(?:^|\\W)${needle}(?:$|\\W)`, 'i').test(hay);
+
+/* -------------------------------- Ontology ------------------------------- */
+// Minimal Day-4 lexicon. Expand/replace from DB later.
+const CONCEPTS: Concept[] = [
+  // Med classes / actives
+  { id: 'MED_TETRACYCLINE', type: 'med', names: ['tetracycline', 'doxycycline', 'minocycline'] },
+  { id: 'MED_IRON', type: 'med', names: ['iron', 'ferrous sulfate', 'ferrous gluconate', 'ferrous fumarate'] },
+  { id: 'MED_LEVOTHYROXINE', type: 'med', names: ['levothyroxine', 'synthroid', 'levoxyl', 'eltroxin', 'euthyrox'] },
+  { id: 'CLASS_PPI', type: 'class', names: ['omeprazole', 'lansoprazole', 'pantoprazole', 'esomeprazole', 'rabeprazole'] },
+  { id: 'CLASS_NSAID', type: 'class', names: ['ibuprofen', 'naproxen', 'diclofenac', 'aspirin', 'advil', 'motrin', 'aleve', 'voltaren'] },
+  
+  // New medications for Day 5
+  { id: 'MED_BISPHOSPHONATE', type: 'med', names: ['alendronate', 'fosamax', 'risedronate', 'actonel', 'ibandronate', 'boniva', 'zoledronic acid', 'reclast'] },
+  { id: 'MED_FLUOROQUINOLONE', type: 'med', names: ['ciprofloxacin', 'cipro', 'levofloxacin', 'levaquin', 'moxifloxacin', 'avelox', 'ofloxacin'] },
+  { id: 'MED_WARFARIN', type: 'med', names: ['warfarin', 'coumadin', 'jantoven'] },
+  { id: 'CLASS_MAOI', type: 'class', names: ['phenelzine', 'nardil', 'tranylcypromine', 'parnate', 'isocarboxazid', 'marplan', 'selegiline', 'emsam'] },
+  { id: 'CLASS_STATIN', type: 'class', names: ['atorvastatin', 'lipitor', 'simvastatin', 'zocor', 'rosuvastatin', 'crestor', 'pravastatin', 'lovastatin'] },
+  { id: 'MED_PROBIOTIC', type: 'med', names: ['probiotic', 'lactobacillus', 'bifidobacterium', 'saccharomyces', 'culturelle', 'align'] },
+  { id: 'MED_METFORMIN', type: 'med', names: ['metformin', 'glucophage', 'glumetza', 'fortamet'] },
+  { id: 'MED_VITAMIN_D', type: 'med', names: ['vitamin d', 'vitamin d3', 'cholecalciferol', 'vitamin d2', 'ergocalciferol'] },
+  { id: 'MED_B12', type: 'med', names: ['vitamin b12', 'b12', 'cyanocobalamin', 'methylcobalamin'] },
+  { id: 'MED_MAGNESIUM', type: 'med', names: ['magnesium', 'magnesium oxide', 'magnesium citrate', 'magnesium glycinate'] },
+  { id: 'CLASS_ANTIBIOTIC', type: 'class', names: ['antibiotic', 'amoxicillin', 'azithromycin', 'cephalexin', 'doxycycline', 'ciprofloxacin'] },
+
+  // Foods / beverages / nutrients
+  { id: 'FOOD_DAIRY', type: 'food', names: ['dairy', 'milk', 'cheese', 'yogurt'] },
+  { id: 'FOOD_MEAL', type: 'food', names: ['meal', 'food', 'breakfast', 'lunch', 'dinner', 'snack'] },
+  { id: 'BEV_COFFEE', type: 'food', names: ['coffee'] },
+  { id: 'BEV_TEA', type: 'food', names: ['tea'] },
+  { id: 'NUT_CALCIUM', type: 'nutrient', names: ['calcium', 'calcium carbonate', 'calcium citrate'] },
+  { id: 'NUT_IRON', type: 'nutrient', names: ['iron', 'ferrous', 'ferrous sulfate', 'ferrous gluconate', 'ferrous fumarate'] }, // nutrient aspect of iron
+  
+  // New foods/nutrients for Day 5
+  { id: 'FOOD_GRAPEFRUIT', type: 'food', names: ['grapefruit', 'grapefruit juice'] },
+  { id: 'FOOD_VITAMIN_K', type: 'food', names: ['leafy greens', 'spinach', 'kale', 'broccoli', 'brussels sprouts', 'vitamin k'] },
+  { id: 'FOOD_TYRAMINE', type: 'food', names: ['aged cheese', 'cured meat', 'fermented food', 'soy sauce', 'tyramine', 'salami', 'pepperoni'] },
+  { id: 'FOOD_FAT', type: 'food', names: ['fatty food', 'oil', 'butter', 'avocado', 'nuts', 'fat'] },
+  { id: 'NUT_MINERALS', type: 'nutrient', names: ['minerals', 'zinc', 'magnesium', 'aluminum', 'antacid'] },
+  { id: 'FOOD_EMPTY_STOMACH', type: 'food', names: ['empty stomach', 'fasting'] },
+  { id: 'TIME_BEDTIME', type: 'food', names: ['bedtime', 'before bed', 'nighttime'] },
+];
+
+// Lookup tables
+const NAME_TO_CONCEPT = (() => {
+  const map = new Map<string, string>(); // synonym -> conceptId
+  for (const c of CONCEPTS) {
+    for (const n of c.names) map.set(norm(n), c.id);
+  }
+  return map;
+})();
+
+function detectConceptsFromString(s?: string): Set<string> {
+  const out = new Set<string>();
+  if (!s) return out;
+  const ns = norm(s);
+  for (const [name, cid] of NAME_TO_CONCEPT.entries()) {
+    if (hasWord(ns, name)) out.add(cid);
+  }
+  return out;
+}
+
+function detectConceptsFromTags(tags?: string[]): Set<string> {
+  const out = new Set<string>();
+  if (!tags?.length) return out;
+  for (const raw of tags) {
+    const n = norm(raw);
+    for (const [name, cid] of NAME_TO_CONCEPT.entries()) {
+      if (hasWord(n, name)) out.add(cid);
+    }
+  }
+  return out;
+}
+
+/* --------------------------- Rule Implementations ------------------------ */
+// Declarative rule set (easily moved to JSON/DB later).
+
+const RULES_V010: TimingRuleDescriptor[] = [
+  // Original 5 rules
+  {
+    id: 'tetracycline-dairy',
+    name: 'Tetracyclines and dairy',
+    title: 'Timing consideration',
+    message: () =>
+      'Commonly reported: tetracyclines may be less effective when taken with dairy. Many sources suggest spacing by 2+ hours. This is general information—confirm with a pharmacist.',
+    type: 'medication',
+    mode: 'cooccur',
+    subjectConcepts: ['MED_TETRACYCLINE'],
+    antagonistConcepts: ['FOOD_DAIRY', 'NUT_CALCIUM'],
+    windowHours: [0, 2],
+    baseConfidence: 'High',
+  },
+  {
+    id: 'iron-inhibitors',
+    name: 'Iron absorption inhibitors',
+    title: 'Iron absorption',
+    message: () =>
+      'Commonly reported: coffee, tea, and calcium may reduce iron absorption. Consider spacing by 1–2 hours. This is general information—confirm with a pharmacist.',
+    type: 'medication',
+    mode: 'cooccur',
+    subjectConcepts: ['MED_IRON', 'NUT_IRON'],
+    antagonistConcepts: ['BEV_COFFEE', 'BEV_TEA', 'NUT_CALCIUM', 'FOOD_DAIRY'],
+    windowHours: [0, 2],
+    baseConfidence: 'High',
+  },
+  {
+    id: 'levothyroxine-timing',
+    name: 'Levothyroxine timing',
+    title: 'Levothyroxine timing',
+    message: () =>
+      'Commonly reported: levothyroxine is often taken 30–60 min before food or coffee. Calcium and iron supplements are often separated by ~4 hours. This is general information—confirm with a pharmacist.',
+    type: 'medication',
+    mode: 'cooccur',
+    subjectConcepts: ['MED_LEVOTHYROXINE'],
+    antagonistConcepts: ['FOOD_MEAL', 'BEV_COFFEE', 'NUT_CALCIUM', 'NUT_IRON'],
+    windowHours: [0, 4],
+    baseConfidence: 'High',
+  },
+  {
+    id: 'ppi-meal-timing',
+    name: 'PPI meal timing',
+    title: 'PPI timing',
+    message: () =>
+      'Commonly reported: PPIs (e.g., omeprazole) are often taken 30–60 minutes before a meal for best effect. This is general information—confirm with a pharmacist.',
+    type: 'medication',
+    mode: 'absence-of-helper',
+    subjectConcepts: ['CLASS_PPI'],
+    antagonistConcepts: ['FOOD_MEAL'],
+    windowHours: [0.5, 1],
+    baseConfidence: 'Medium',
+  },
+  {
+    id: 'nsaid-food',
+    name: 'NSAIDs with food',
+    title: 'NSAID consideration',
+    message: () =>
+      'Commonly reported: NSAIDs (e.g., ibuprofen) are often taken with food to reduce stomach upset. This is general information—confirm with a pharmacist.',
+    type: 'medication',
+    mode: 'absence-of-helper',
+    subjectConcepts: ['CLASS_NSAID'],
+    antagonistConcepts: ['FOOD_MEAL'],
+    baseConfidence: 'Medium',
+  },
+  
+  // New Day 5 rules - High confidence
+  {
+    id: 'bisphosphonate-food',
+    name: 'Bisphosphonates and food',
+    title: 'Bisphosphonate timing',
+    message: () =>
+      'Commonly reported: bisphosphonates (e.g., alendronate) should be taken on empty stomach with water, 30+ min before food. Stay upright for 30 min. This is general information—confirm with a pharmacist.',
+    type: 'medication',
+    mode: 'cooccur',
+    subjectConcepts: ['MED_BISPHOSPHONATE'],
+    antagonistConcepts: ['FOOD_MEAL', 'NUT_CALCIUM', 'FOOD_DAIRY'],
+    windowHours: [0, 0.5],
+    baseConfidence: 'High',
+  },
+  {
+    id: 'fluoroquinolone-minerals',
+    name: 'Fluoroquinolones and minerals',
+    title: 'Fluoroquinolone interaction',
+    message: () =>
+      'Commonly reported: fluoroquinolones (e.g., ciprofloxacin) absorption may be reduced by dairy, minerals, or antacids. Consider spacing by 2+ hours. This is general information—confirm with a pharmacist.',
+    type: 'medication',
+    mode: 'cooccur',
+    subjectConcepts: ['MED_FLUOROQUINOLONE'],
+    antagonistConcepts: ['FOOD_DAIRY', 'NUT_CALCIUM', 'NUT_MINERALS'],
+    windowHours: [0, 2],
+    baseConfidence: 'High',
+  },
+  {
+    id: 'warfarin-vitamin-k',
+    name: 'Warfarin and vitamin K',
+    title: 'Warfarin consistency',
+    message: () =>
+      'Commonly reported: maintain consistent vitamin K intake (leafy greens) while on warfarin to avoid INR fluctuations. This is general information—confirm with a pharmacist.',
+    type: 'medication',
+    mode: 'cooccur',
+    subjectConcepts: ['MED_WARFARIN'],
+    antagonistConcepts: ['FOOD_VITAMIN_K'],
+    windowHours: [0, 24],
+    baseConfidence: 'High',
+  },
+  {
+    id: 'maoi-tyramine',
+    name: 'MAOIs and tyramine',
+    title: 'MAOI dietary restriction',
+    message: () =>
+      'Commonly reported: MAOIs with tyramine-rich foods (aged cheese, cured meats) can cause dangerous blood pressure spikes. Avoid combination. This is general information—confirm with a pharmacist.',
+    type: 'medication',
+    mode: 'cooccur',
+    subjectConcepts: ['CLASS_MAOI'],
+    antagonistConcepts: ['FOOD_TYRAMINE'],
+    windowHours: [0, 24],
+    baseConfidence: 'High',
+  },
+  {
+    id: 'statin-grapefruit',
+    name: 'Statins and grapefruit',
+    title: 'Statin interaction',
+    message: () =>
+      'Commonly reported: grapefruit can increase statin levels, raising side effect risk. Many sources suggest avoiding or limiting grapefruit. This is general information—confirm with a pharmacist.',
+    type: 'medication',
+    mode: 'cooccur',
+    subjectConcepts: ['CLASS_STATIN'],
+    antagonistConcepts: ['FOOD_GRAPEFRUIT'],
+    windowHours: [0, 24],
+    baseConfidence: 'High',
+  },
+  
+  // New Day 5 rules - Medium confidence
+  {
+    id: 'probiotic-antibiotic',
+    name: 'Probiotics and antibiotics',
+    title: 'Probiotic timing',
+    message: () =>
+      'Commonly reported: spacing probiotics 2-3 hours from antibiotics may improve probiotic survival. This is general information—confirm with a pharmacist.',
+    type: 'medication',
+    mode: 'cooccur',
+    subjectConcepts: ['MED_PROBIOTIC'],
+    antagonistConcepts: ['CLASS_ANTIBIOTIC'],
+    windowHours: [0, 3],
+    baseConfidence: 'Medium',
+  },
+  {
+    id: 'metformin-meals',
+    name: 'Metformin with meals',
+    title: 'Metformin comfort',
+    message: () =>
+      'Commonly reported: taking metformin with food may reduce GI upset. This is general information—confirm with a pharmacist.',
+    type: 'medication',
+    mode: 'absence-of-helper',
+    subjectConcepts: ['MED_METFORMIN'],
+    antagonistConcepts: ['FOOD_MEAL'],
+    baseConfidence: 'Medium',
+  },
+  {
+    id: 'vitamin-d-fat',
+    name: 'Vitamin D absorption',
+    title: 'Vitamin D with fat',
+    message: () =>
+      'Commonly reported: vitamin D absorption may improve when taken with fatty foods. This is general information—confirm with a pharmacist.',
+    type: 'medication',
+    mode: 'absence-of-helper',
+    subjectConcepts: ['MED_VITAMIN_D'],
+    antagonistConcepts: ['FOOD_FAT'],
+    baseConfidence: 'Medium',
+  },
+  {
+    id: 'b12-empty-stomach',
+    name: 'B12 absorption',
+    title: 'B12 timing',
+    message: () =>
+      'Commonly reported: vitamin B12 may absorb better on empty stomach, though food is fine if it causes upset. This is general information—confirm with a pharmacist.',
+    type: 'medication',
+    mode: 'absence-of-helper',
+    subjectConcepts: ['MED_B12'],
+    antagonistConcepts: ['FOOD_EMPTY_STOMACH'],
+    baseConfidence: 'Medium',
+  },
+  {
+    id: 'magnesium-bedtime',
+    name: 'Magnesium at bedtime',
+    title: 'Magnesium timing',
+    message: () =>
+      'Commonly reported: magnesium taken at bedtime may support sleep and reduce daytime drowsiness. This is general information—confirm with a pharmacist.',
+    type: 'medication',
+    mode: 'absence-of-helper',
+    subjectConcepts: ['MED_MAGNESIUM'],
+    antagonistConcepts: ['TIME_BEDTIME'],
+    baseConfidence: 'Medium',
+  },
+];
+
+/* ------------------------------ Rule Engine ------------------------------ */
+
+function evaluateDescriptor(
+  desc: TimingRuleDescriptor,
+  ctx: EvaluationContext,
+): TimingHint | null {
+  const now = ctx.now ?? new Date();
+
+  // Resolve concepts present "now"
+  const medConcepts = detectConceptsFromString(ctx.currentMed);
+  const tagConcepts = detectConceptsFromTags(ctx.currentTags);
+
+  const subjectHit = desc.subjectConcepts.some(c => medConcepts.has(c) || tagConcepts.has(c));
+  if (!subjectHit) return null;
+
+  const antagonists = new Set(desc.antagonistConcepts ?? []);
+
+  // Window logic (for Day 4, we only look at present tags; logs can be added later)
+  const hasAntagonistNow = [...antagonists].some(c => medConcepts.has(c) || tagConcepts.has(c));
+
+  // Mode: 'cooccur' → show when subject AND antagonist are both present (within window)
+  // Mode: 'absence-of-helper' → show when subject present but helper (e.g., food) is NOT present
+  if (desc.mode === 'cooccur') {
+    // We don't have precise timestamps for "current tags"; treat as co-present at "now".
+    if (!hasAntagonistNow) return null;
+  } else if (desc.mode === 'absence-of-helper') {
+    if (hasAntagonistNow) return null; // helper already present; no hint needed
+  }
+
+  // (Optional) Expand with recentMeds/recentSymptoms time-window checks as you wire UI:
+  // Example scaffold for future:
+  // if (desc.windowHours) {
+  //   const [lo, hi] = desc.windowHours;
+  //   const loDate = addHours(now, -hi);
+  //   const hiDate = addHours(now, -lo);
+  //   // Scan ctx.recentMeds/tags events for more precise within-interval logic
+  //   // using isWithinInterval(e.timestamp, { start: loDate, end: hiDate })
+  // }
+
+  return {
+    title: desc.title,
+    message: desc.message({ window: desc.windowHours }),
+    confidence: desc.baseConfidence,
+    type: desc.type,
+    educational: true,
+    meta: {
+      ruleId: desc.id,
+      windowHours: desc.windowHours,
+      concepts: [
+        ...desc.subjectConcepts,
+        ...Array.from(antagonists.values()),
+      ],
+      version: 'ruleset-0.1.0',
+    },
+  };
+}
+
+export function evaluateTimingHints(context: EvaluationContext, max: number = 2): TimingHint[] {
+  const hints: TimingHint[] = [];
+  for (const rule of RULES_V010) {
+    const hint = evaluateDescriptor(rule, context);
+    if (hint) hints.push(hint);
+  }
+  // Simple de-dup + top-N by confidence
+  const order = { High: 3, Medium: 2, Low: 1 } as const;
+  const uniqByRule = new Map<string, TimingHint>();
+  for (const h of hints) {
+    const key = h.meta?.ruleId ?? h.title;
+    const prev = uniqByRule.get(key);
+    if (!prev || order[h.confidence] > order[prev.confidence]) uniqByRule.set(key, h);
+  }
+  return Array.from(uniqByRule.values())
+    .sort((a, b) => order[b.confidence] - order[a.confidence])
+    .slice(0, max);
+}
+
+/* --------------------------- Post-hoc Correlation ------------------------ */
+// Placeholder for Day 6+: analyze logs to adjust confidence dynamically
+// (occurrence vs. non-occurrence rates). Kept for API stability.
+
+export function checkMedSymptomTiming(
+  _symptoms: Symptom[],
+  _meds: MedLog[],
+  _windowHours: number = 24,
+): TimingHint[] {
+  return [];
+}
+
+/* --------------------------------- Notes --------------------------------- */
+// How to extend next:
+// 1) Move CONCEPTS & RULES to JSON (or DB) and load at runtime.
+// 2) Populate Concept.codes with rxnorm/din/npn for canonical matching.
+// 3) Add an Event timeline (tag/med with timestamp) and replace "co-present"
+//    assumptions with precise within-interval checks using isWithinInterval.
+// 4) Add a confidence scorer that looks at your historical logs to uplift/downgrade
+//    baseConfidence (e.g., if guidance was followed and symptoms improved).
