@@ -5,12 +5,16 @@ import { useState, useEffect, useMemo } from 'react';
 import { Button } from '@/components/ui/button';
 import { Card } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
-import { Plus, Repeat, Clock, Coffee, Utensils, Pill, X, Milk } from 'lucide-react';
+import { Plus, Repeat, Clock, Coffee, Utensils, Pill, X, Milk, CheckCircle, XCircle, AlertCircle } from 'lucide-react';
 import { toast } from 'sonner';
 import { db } from '@/lib/db/client';
 import { evaluateTimingHints } from '@/lib/rules/timing-rules';
 import { v4 as uuidv4 } from 'uuid';
-import type { MedLog, Symptom } from '@/lib/db/schema';
+import type { MedLog, Symptom, MedicationSchedule, MedicationAdherence } from '@/lib/db/schema';
+// Expose db for testing (remove in production)
+if (typeof window !== 'undefined') {
+  (window as any).db = db;
+}
 
 export function LogTab() {
   const [isLogging, setIsLogging] = useState(false);
@@ -25,6 +29,11 @@ export function LogTab() {
   const [medicationName, setMedicationName] = useState('');
   const [medicationDose, setMedicationDose] = useState('');
   const [medSuggestions, setMedSuggestions] = useState<string[]>([]);
+  const [dueMedications, setDueMedications] = useState<{
+    schedule: MedicationSchedule;
+    scheduledTime: string;
+    status: 'due' | 'overdue';
+  }[]>([]);
 
   // Common symptoms users actually track
   const commonSymptoms = ['Headache', 'Fatigue', 'Nausea', 'Pain', 'Insomnia', 'Anxiety', 'Dizziness'];
@@ -43,7 +52,99 @@ export function LogTab() {
     loadRecentSymptoms();
     loadStreak();
     loadMedSuggestions();
+    loadDueMedications();
+    
+    // Check for due medications every minute
+    const interval = setInterval(loadDueMedications, 60000);
+    return () => clearInterval(interval);
   }, []);
+
+  async function loadDueMedications() {
+    try {
+      const schedules = await db.getMedicationSchedules();
+      const now = new Date();
+      const nowMinutes = now.getHours() * 60 + now.getMinutes();
+      const todayStr = now.toISOString().split('T')[0];
+      
+      const due = [];
+      for (const schedule of schedules) {
+        if (schedule.frequency === 'as-needed') continue;
+        
+        for (const schedTime of schedule.scheduleTimes) {
+          const [schedHour, schedMin] = schedTime.split(':').map(Number);
+          const schedMinutes = schedHour * 60 + schedMin;
+          const diff = nowMinutes - schedMinutes;
+          
+          // Check if within window: -45 min to +90 min
+          if (diff >= -45 && diff <= 90) {
+            const scheduledTime = `${todayStr}T${schedTime}:00.000Z`;
+            const adherence = await db.getAdherenceForTime(schedule.id, scheduledTime);
+            
+            if (!adherence || adherence.status === 'pending') {
+              due.push({ 
+                schedule, 
+                scheduledTime,
+                status: diff > 30 ? 'overdue' : 'due'
+              });
+            }
+          }
+        }
+      }
+      setDueMedications(due);
+    } catch (error) {
+      console.error('Error loading due medications:', error);
+    }
+  }
+
+  async function handleTakeMedication(schedule: MedicationSchedule, scheduledTime: string) {
+    try {
+      const adherence: MedicationAdherence = {
+        id: uuidv4(),
+        scheduleId: schedule.id,
+        medicationName: schedule.medicationName,
+        scheduledTime,
+        takenTime: new Date().toISOString(),
+        status: 'taken',
+      };
+      
+      await db.logAdherence(adherence);
+      toast.success(`${schedule.medicationName} marked as taken`);
+      
+      // Also log it as a MedLog for compatibility with existing features
+      await db.addMed({
+        id: uuidv4(),
+        name: schedule.medicationName,
+        timestamp: new Date().toISOString(),
+        dose: schedule.dosage,
+        notes: 'Taken on schedule'
+      });
+      
+      await loadDueMedications();
+    } catch (error) {
+      console.error('Error marking medication as taken:', error);
+      toast.error('Failed to mark medication as taken');
+    }
+  }
+
+  async function handleSkipMedication(schedule: MedicationSchedule, scheduledTime: string, reason?: string) {
+    try {
+      const adherence: MedicationAdherence = {
+        id: uuidv4(),
+        scheduleId: schedule.id,
+        medicationName: schedule.medicationName,
+        scheduledTime,
+        status: 'skipped',
+        skipReason: reason,
+      };
+      
+      await db.logAdherence(adherence);
+      toast.info(`${schedule.medicationName} skipped`);
+      await loadDueMedications();
+    } catch (error) {
+      console.error('Error marking medication as skipped:', error);
+      toast.error('Failed to mark medication as skipped');
+    }
+  }
 
   async function loadRecentSymptoms() {
     const symptoms = await db.getAllSymptoms();
@@ -218,11 +319,12 @@ export function LogTab() {
         });
       }
 
-      const elapsed = ((Date.now() - t0) / 1000).toFixed(1);
+      const elapsed = ((Date.now() - t0) / 1000).toFixed(2);
+      console.log(`[7-SECOND TEST] Symptom logging completed in ${elapsed}s (${Date.now() - t0}ms)`);
       toast.success(`Logged in ${elapsed}s! 🚀`, {
         description: `${selectedSymptoms.length} symptom${selectedSymptoms.length > 1 ? 's' : ''}${medName ? ' + medication' : ''} saved`,
       });
-
+      
       // Reset form
       setSelectedSymptoms([]);
       setSeverity(4);
@@ -255,6 +357,47 @@ export function LogTab() {
 
   return (
     <div className="space-y-4" role="region" aria-label="Symptom logger">
+      {/* Due Medications Strip */}
+      {dueMedications.length > 0 && (
+        <Card className="p-3 border-orange-200 bg-orange-50 dark:bg-orange-950">
+          <div className="flex items-center gap-2 mb-2">
+            <AlertCircle className="h-4 w-4 text-orange-600" />
+            <span className="font-medium text-sm">Medications Due Now</span>
+          </div>
+          <div className="space-y-2">
+            {dueMedications.map(({ schedule, scheduledTime, status }) => (
+              <div key={`${schedule.id}-${scheduledTime}`} className="flex items-center justify-between">
+                <div className="flex-1">
+                  <span className="font-medium">{schedule.medicationName}</span>
+                  <span className="text-sm text-gray-600 ml-2">{schedule.dosage}</span>
+                  {status === 'overdue' && (
+                    <span className="text-xs text-red-600 ml-2">(overdue)</span>
+                  )}
+                </div>
+                <div className="flex gap-1">
+                  <Button
+                    size="sm"
+                    variant="default"
+                    onClick={() => handleTakeMedication(schedule, scheduledTime)}
+                  >
+                    <CheckCircle className="h-4 w-4 mr-1" />
+                    Taken
+                  </Button>
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    onClick={() => handleSkipMedication(schedule, scheduledTime, 'User skipped')}
+                  >
+                    <XCircle className="h-4 w-4 mr-1" />
+                    Skip
+                  </Button>
+                </div>
+              </div>
+            ))}
+          </div>
+        </Card>
+      )}
+
       {!isLogging ? (
         <>
           <Button

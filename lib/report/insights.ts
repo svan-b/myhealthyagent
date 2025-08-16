@@ -416,3 +416,79 @@ export function detectPatterns(
 // pass through detectPatterns({ detectors: [...builtInDetectors, ...ruleDetectors] }).
 // Later, ONNX model outputs can be wrapped as another PatternDetector that emits
 // Pattern objects with `type: 'correlation'` and a model id in metadata.
+
+// ===== MEDICATION ADHERENCE PATTERNS =====
+import { db } from '@/lib/db/client';
+import { calculateAdherence, getAdherenceInsights } from '@/lib/medication/adherence';
+import type { MedicationSchedule, MedicationAdherence } from '@/lib/db/schema';
+
+export async function detectMedicationPatterns(days: number = 30): Promise<Pattern[]> {
+  const patterns: Pattern[] = [];
+  
+  try {
+    const schedules = await db.getMedicationSchedules();
+    
+    for (const schedule of schedules) {
+      const adherenceRecords = await db.getAdherenceBySchedule(schedule.id, days);
+      
+      if (adherenceRecords.length < 3) continue; // Need some data
+      
+      const metrics = calculateAdherence(schedule, adherenceRecords, days);
+      
+      // Add adherence percentage pattern
+      if (metrics.totalDoses > 0) {
+        let confidence: Pattern['confidence'] = 'Low';
+        if (metrics.totalDoses >= 14) confidence = 'High';
+        else if (metrics.totalDoses >= 7) confidence = 'Medium';
+        
+        patterns.push({
+          text: `${schedule.medicationName}: ${metrics.adherencePercentage}% adherence (${metrics.takenDoses}/${metrics.totalDoses} doses taken)`,
+          confidence,
+          type: 'medication-adherence',
+          meta: {
+            medicationName: schedule.medicationName,
+            adherencePercentage: metrics.adherencePercentage,
+          }
+        });
+      }
+      
+      // Add timing consistency pattern if applicable
+      if (metrics.timingConsistencyMinutes !== null && metrics.takenDoses >= 5) {
+        const consistency = metrics.timingConsistencyMinutes <= 30 ? 'excellent' :
+                          metrics.timingConsistencyMinutes <= 60 ? 'good' : 'variable';
+        patterns.push({
+          text: `${schedule.medicationName}: ${consistency} timing consistency (±${metrics.timingConsistencyMinutes} min average)`,
+          confidence: 'Medium',
+          type: 'medication-timing',
+          meta: {
+            medicationName: schedule.medicationName,
+            timingVariance: metrics.timingConsistencyMinutes,
+          }
+        });
+      }
+      
+      // Add missed dose patterns
+      const timeOfDayEntries = Object.entries(metrics.missedByTimeOfDay);
+      const maxMissed = Math.max(...timeOfDayEntries.map(([_, count]) => count));
+      if (maxMissed >= 3) {
+        const problemTime = timeOfDayEntries.find(([_, count]) => count === maxMissed)?.[0];
+        if (problemTime) {
+          patterns.push({
+            text: `${schedule.medicationName}: Most doses missed in the ${problemTime} (${maxMissed} times)`,
+            confidence: 'Medium',
+            type: 'medication-missed-pattern',
+            meta: {
+              medicationName: schedule.medicationName,
+              problemTime,
+              missedCount: maxMissed,
+            }
+          });
+        }
+      }
+    }
+  } catch (error) {
+    console.error('Error detecting medication patterns:', error);
+  }
+  
+  return patterns;
+}

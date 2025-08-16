@@ -6,6 +6,7 @@ import dynamic from 'next/dynamic';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { LogTab } from './components/LogTab';
 import { History } from './components/History';
+import { MedicationManager } from './components/MedicationManager';
 import { ReportGenerator } from './components/ReportGenerator';
 import { ThemeToggle } from './components/ThemeToggle';
 import { InstallPrompt } from './components/InstallPrompt';
@@ -19,7 +20,7 @@ const Charts = dynamic(() => import('./components/Charts').then(m => m.Charts), 
 });
 
 export default function HomePage() {
-  const [activeTab, setActiveTab] = useState<'log' | 'history' | 'charts'>('log');
+  const [activeTab, setActiveTab] = useState<'log' | 'history' | 'charts' | 'medications'>('log');
   
   const handleStartEdit = () => {
     setActiveTab('log');
@@ -34,11 +35,12 @@ export default function HomePage() {
           <ThemeToggle />
         </div>
         
-        <Tabs value={activeTab} onValueChange={(v) => setActiveTab(v as "log" | "history" | "charts")}>
-          <TabsList className="grid w-full grid-cols-3">
+        <Tabs value={activeTab} onValueChange={(v) => setActiveTab(v as "log" | "history" | "charts" | "medications")}>
+          <TabsList className="grid w-full grid-cols-4">
             <TabsTrigger value="log">Log</TabsTrigger>
             <TabsTrigger value="history">History</TabsTrigger>
             <TabsTrigger value="charts">Charts</TabsTrigger>
+            <TabsTrigger value="medications">Meds</TabsTrigger>
           </TabsList>
           
           <TabsContent value="log">
@@ -51,6 +53,10 @@ export default function HomePage() {
           
           <TabsContent value="charts">
             <Charts />
+          </TabsContent>
+          
+          <TabsContent value="medications">
+            <MedicationManager />
           </TabsContent>
         </Tabs>
         
