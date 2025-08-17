@@ -1,19 +1,18 @@
 # Mobile UX Issues - Day 8 Testing
 
 ## Critical (Blocking MVP)
-1. **Slider doesn't work** - Can't drag, only tap. Core interaction broken.
-2. **No selection feedback** - Can't see what's selected. Users will think it's broken.
-3. **Extremely cramped** - Everything touching, no visual hierarchy.
-4. **Charts cut off** - Major feature unusable on mobile.
+1. **Slider broken** - Can't drag, only tap
+2. **No selection feedback** - Purple state not showing
+3. **Extremely cramped** - No spacing, tiny targets
+4. **Charts cut off** - Overflow hidden on mobile
 
-## High Priority
-- Text too small
-- Buttons too close together  
-- No padding anywhere
-- Form feels overwhelming
-- Save button hard to find
+## Solution for Day 9
+- Replace slider with segment buttons (Low/Med/High/Severe)
+- 3-screen progressive flow
+- Minimum 44px touch targets
+- Safe area padding for iOS
 
-## The Reality
-Current state: Functional prototype
-Needed for MVP: Clean, focused, delightful
-Gap: Complete UX redesign needed
+## Success Criteria
+- 7-second flow for 1 symptom (E2E tested)
+- Clear visual feedback
+- One-thumb operation
