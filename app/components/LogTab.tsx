@@ -11,9 +11,16 @@ import { db } from '@/lib/db/client';
 import { evaluateTimingHints } from '@/lib/rules/timing-rules';
 import { v4 as uuidv4 } from 'uuid';
 import type { MedLog, Symptom, MedicationSchedule, MedicationAdherence } from '@/lib/db/schema';
+
+// Make window.db typed for test exposure (no 'any')
+declare global {
+  interface Window {
+    db: typeof db;
+  }
+}
 // Expose db for testing (remove in production)
 if (typeof window !== 'undefined') {
-  (window as any).db = db;
+  window.db = db;
 }
 
 export function LogTab() {
@@ -53,10 +60,11 @@ export function LogTab() {
     loadStreak();
     loadMedSuggestions();
     loadDueMedications();
-    
+
     // Check for due medications every minute
     const interval = setInterval(loadDueMedications, 60000);
     return () => clearInterval(interval);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   async function loadDueMedications() {
@@ -65,26 +73,28 @@ export function LogTab() {
       const now = new Date();
       const nowMinutes = now.getHours() * 60 + now.getMinutes();
       const todayStr = now.toISOString().split('T')[0];
-      
-      const due = [];
+
+      type DueItem = { schedule: MedicationSchedule; scheduledTime: string; status: 'due' | 'overdue' };
+      const due: DueItem[] = [];
+
       for (const schedule of schedules) {
         if (schedule.frequency === 'as-needed') continue;
-        
+
         for (const schedTime of schedule.scheduleTimes) {
           const [schedHour, schedMin] = schedTime.split(':').map(Number);
           const schedMinutes = schedHour * 60 + schedMin;
           const diff = nowMinutes - schedMinutes;
-          
+
           // Check if within window: -45 min to +90 min
           if (diff >= -45 && diff <= 90) {
             const scheduledTime = `${todayStr}T${schedTime}:00.000Z`;
             const adherence = await db.getAdherenceForTime(schedule.id, scheduledTime);
-            
+
             if (!adherence || adherence.status === 'pending') {
-              due.push({ 
-                schedule, 
+              due.push({
+                schedule,
                 scheduledTime,
-                status: diff > 30 ? 'overdue' : 'due'
+                status: diff > 30 ? ('overdue' as const) : ('due' as const),
               });
             }
           }
@@ -106,19 +116,19 @@ export function LogTab() {
         takenTime: new Date().toISOString(),
         status: 'taken',
       };
-      
+
       await db.logAdherence(adherence);
       toast.success(`${schedule.medicationName} marked as taken`);
-      
+
       // Also log it as a MedLog for compatibility with existing features
       await db.addMed({
         id: uuidv4(),
         name: schedule.medicationName,
         timestamp: new Date().toISOString(),
         dose: schedule.dosage,
-        notes: 'Taken on schedule'
+        notes: 'Taken on schedule',
       });
-      
+
       await loadDueMedications();
     } catch (error) {
       console.error('Error marking medication as taken:', error);
@@ -136,7 +146,7 @@ export function LogTab() {
         status: 'skipped',
         skipReason: reason,
       };
-      
+
       await db.logAdherence(adherence);
       toast.info(`${schedule.medicationName} skipped`);
       await loadDueMedications();
@@ -149,7 +159,9 @@ export function LogTab() {
   async function loadRecentSymptoms() {
     const symptoms = await db.getAllSymptoms();
     const counts: Record<string, number> = {};
-    symptoms.forEach(s => { counts[s.name] = (counts[s.name] || 0) + 1; });
+    symptoms.forEach((s) => {
+      counts[s.name] = (counts[s.name] || 0) + 1;
+    });
 
     const sorted = Object.entries(counts)
       .sort((a, b) => b[1] - a[1])
@@ -157,7 +169,7 @@ export function LogTab() {
       .map(([name]) => name);
 
     // Filter out those already in commonSymptoms to avoid duplicates
-    const filtered = sorted.filter(s => !commonSymptoms.includes(s));
+    const filtered = sorted.filter((s) => !commonSymptoms.includes(s));
     setRecentSymptoms(filtered);
   }
 
@@ -194,21 +206,17 @@ export function LogTab() {
   }
 
   const normalizedTags = useMemo(
-    () => Array.from(new Set(contextTags.map(t => t.toLowerCase().trim()))),
-    [contextTags]
+    () => Array.from(new Set(contextTags.map((t) => t.toLowerCase().trim()))),
+    [contextTags],
   );
 
   function toggleSymptom(symptom: string) {
-    setSelectedSymptoms(prev =>
-      prev.includes(symptom) ? prev.filter(s => s !== symptom) : [...prev, symptom]
-    );
+    setSelectedSymptoms((prev) => (prev.includes(symptom) ? prev.filter((s) => s !== symptom) : [...prev, symptom]));
   }
 
   function toggleContext(tag: string) {
     const t = tag.toLowerCase().trim();
-    setContextTags(prev =>
-      prev.includes(t) ? prev.filter(x => x !== t) : [...prev, t]
-    );
+    setContextTags((prev) => (prev.includes(t) ? prev.filter((x) => x !== t) : [...prev, t]));
   }
 
   function addCustomSymptom() {
@@ -221,7 +229,7 @@ export function LogTab() {
   function addCustomContextTag() {
     const t = customTag.toLowerCase().trim();
     if (!t) return;
-    if (!normalizedTags.includes(t)) setContextTags(prev => [...prev, t]);
+    if (!normalizedTags.includes(t)) setContextTags((prev) => [...prev, t]);
     setCustomTag('');
   }
 
@@ -236,7 +244,7 @@ export function LogTab() {
 
     try {
       // Write symptoms in parallel
-      const symptomWrites = selectedSymptoms.map(symptom =>
+      const symptomWrites = selectedSymptoms.map((symptom) =>
         db.addSymptom({
           id: uuidv4(),
           name: symptom,
@@ -244,7 +252,7 @@ export function LogTab() {
           timestamp,
           notes: notes || undefined,
           tags: normalizedTags.length ? normalizedTags : undefined,
-        })
+        }),
       );
       await Promise.all(symptomWrites);
 
@@ -267,23 +275,22 @@ export function LogTab() {
       // Evaluate timing hints:
       // 1) with current med (if provided)
       // 2) with the most recent meds in the last 24h (covers coffee/meal after earlier meds)
-      const [recentMeds, allSymptoms]: [MedLog[], Symptom[]] = await Promise.all([
-        db.getRecentMeds(24),
-        db.getAllSymptoms(),
-      ]);
+      const [recentMeds, allSymptoms]: [MedLog[], Symptom[]] = await Promise.all([db.getRecentMeds(24), db.getAllSymptoms()]);
 
-      const hintPool = [];
+      // Build a pool of hints to show
+      const hintPool: any[] = [];
+
       if (medLogged) {
         hintPool.push(
           ...evaluateTimingHints({
-            recentSymptoms: allSymptoms,
             recentMeds,
             currentTags: normalizedTags,
             currentMed: medLogged.name,
-            now: new Date(),
-          }, 2)
+            max: 2,
+          }),
         );
       }
+
       // Evaluate against up to 2 most recent meds even if no current med
       const recentForTags = recentMeds
         .sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime())
@@ -292,31 +299,33 @@ export function LogTab() {
       for (const m of recentForTags) {
         hintPool.push(
           ...evaluateTimingHints({
-            recentSymptoms: allSymptoms,
             recentMeds,
             currentTags: normalizedTags,
             currentMed: m.name,
-            now: new Date(),
-          }, 1)
+            max: 1,
+          }),
         );
       }
 
       // Show timing hints if any (dedupe by rule id/title)
       if (hintPool.length) {
         const order = { High: 3, Medium: 2, Low: 1 } as const;
-        const uniq = new Map<string, typeof hintPool[0]>();
+        const uniq = new Map<string, (typeof hintPool)[number]>();
         for (const h of hintPool) {
-          const key = h.meta?.ruleId ?? h.title;
+          // tolerate either shape; TimingHint from rules has ruleId/message, some UI might supply title/meta
+          const key = (h.meta && h.meta.ruleId) || h.ruleId || h.title || JSON.stringify(h);
           const prev = uniq.get(key);
           if (!prev || order[h.confidence] > order[prev.confidence]) uniq.set(key, h);
         }
-        Array.from(uniq.values()).slice(0, 2).forEach(hint => {
-          toast(hint.title, {
-            description: hint.message,
-            duration: 8000,
-            action: hint.confidence === 'High' ? { label: 'Got it', onClick: () => {} } : undefined,
+        Array.from(uniq.values())
+          .slice(0, 2)
+          .forEach((hint: any) => {
+            toast(hint.title || hint.message, {
+              description: hint.message,
+              duration: 8000,
+              action: hint.confidence === 'High' ? { label: 'Got it', onClick: () => {} } : undefined,
+            });
           });
-        });
       }
 
       const elapsed = ((Date.now() - t0) / 1000).toFixed(2);
@@ -324,7 +333,7 @@ export function LogTab() {
       toast.success(`Logged in ${elapsed}s! 🚀`, {
         description: `${selectedSymptoms.length} symptom${selectedSymptoms.length > 1 ? 's' : ''}${medName ? ' + medication' : ''} saved`,
       });
-      
+
       // Reset form
       setSelectedSymptoms([]);
       setSeverity(4);
@@ -349,7 +358,7 @@ export function LogTab() {
       toast.error('No symptoms logged yesterday');
       return;
     }
-    const uniqueNames = [...new Set(symptoms.map(s => s.name))];
+    const uniqueNames = [...new Set(symptoms.map((s) => s.name))];
     setSelectedSymptoms(uniqueNames);
     setIsLogging(true);
     toast.success(`Loaded ${uniqueNames.length} symptoms from yesterday`);
@@ -370,16 +379,10 @@ export function LogTab() {
                 <div className="flex-1">
                   <span className="font-medium">{schedule.medicationName}</span>
                   <span className="text-sm text-gray-600 ml-2">{schedule.dosage}</span>
-                  {status === 'overdue' && (
-                    <span className="text-xs text-red-600 ml-2">(overdue)</span>
-                  )}
+                  {status === 'overdue' && <span className="text-xs text-red-600 ml-2">(overdue)</span>}
                 </div>
                 <div className="flex gap-1">
-                  <Button
-                    size="sm"
-                    variant="default"
-                    onClick={() => handleTakeMedication(schedule, scheduledTime)}
-                  >
+                  <Button size="sm" variant="default" onClick={() => handleTakeMedication(schedule, scheduledTime)}>
                     <CheckCircle className="h-4 w-4 mr-1" />
                     Taken
                   </Button>
@@ -400,20 +403,12 @@ export function LogTab() {
 
       {!isLogging ? (
         <>
-          <Button
-            onClick={() => setIsLogging(true)}
-            className="w-full h-24 text-lg"
-            size="lg"
-          >
+          <Button onClick={() => setIsLogging(true)} className="w-full h-24 text-lg" size="lg">
             <Plus className="mr-2 h-6 w-6" />
             Log Symptoms
           </Button>
 
-          <Button
-            variant="outline"
-            onClick={handleRepeatYesterday}
-            className="w-full"
-          >
+          <Button variant="outline" onClick={handleRepeatYesterday} className="w-full">
             <Repeat className="mr-2 h-4 w-4" />
             Repeat Yesterday
           </Button>
@@ -425,12 +420,7 @@ export function LogTab() {
             <div className="flex items-center justify-between mb-2">
               <p className="text-sm font-medium">Context (optional)</p>
               {contextTags.length > 0 && (
-                <Button
-                  variant="ghost"
-                  size="sm"
-                  onClick={() => setContextTags([])}
-                  className="h-8 px-2 text-xs"
-                >
+                <Button variant="ghost" size="sm" onClick={() => setContextTags([])} className="h-8 px-2 text-xs">
                   <X className="h-3 w-3 mr-1" /> Clear
                 </Button>
               )}
@@ -460,7 +450,9 @@ export function LogTab() {
                 aria-label="Custom context tag"
                 className="text-sm"
               />
-              <Button onClick={addCustomContextTag} size="sm">Add</Button>
+              <Button onClick={addCustomContextTag} size="sm">
+                Add
+              </Button>
             </div>
           </div>
 
@@ -469,7 +461,7 @@ export function LogTab() {
 
           {/* Common Symptoms */}
           <div className="flex flex-wrap gap-2 mb-3">
-            {commonSymptoms.map(symptom => (
+            {commonSymptoms.map((symptom) => (
               <Button
                 key={symptom}
                 variant={selectedSymptoms.includes(symptom) ? 'default' : 'outline'}
@@ -485,7 +477,7 @@ export function LogTab() {
           {/* Recent Symptoms */}
           {recentSymptoms.length > 0 && (
             <div className="flex flex-wrap gap-2 mb-3">
-              {recentSymptoms.map(symptom => (
+              {recentSymptoms.map((symptom) => (
                 <Button
                   key={symptom}
                   variant={selectedSymptoms.includes(symptom) ? 'secondary' : 'outline'}
@@ -509,7 +501,9 @@ export function LogTab() {
               onKeyDown={(e) => e.key === 'Enter' && addCustomSymptom()}
               aria-label="Custom symptom"
             />
-            <Button onClick={addCustomSymptom} size="sm">Add</Button>
+            <Button onClick={addCustomSymptom} size="sm">
+              Add
+            </Button>
           </div>
 
           {/* Medication Input with suggestions */}
@@ -573,17 +567,10 @@ export function LogTab() {
 
           {/* Actions */}
           <div className="flex gap-2">
-            <Button
-              onClick={handleLog}
-              className="flex-1"
-              disabled={selectedSymptoms.length === 0}
-            >
+            <Button onClick={handleLog} className="flex-1" disabled={selectedSymptoms.length === 0}>
               Save {selectedSymptoms.length > 0 && `(${selectedSymptoms.length})`}
             </Button>
-            <Button
-              variant="outline"
-              onClick={() => setIsLogging(false)}
-            >
+            <Button variant="outline" onClick={() => setIsLogging(false)}>
               Cancel
             </Button>
           </div>
@@ -594,10 +581,7 @@ export function LogTab() {
       <div className="text-center pt-2">
         <p className="text-2xl font-bold">{streak}-day streak!</p>
         <div className="w-full bg-gray-200 rounded-full h-2 mt-2">
-          <div
-            className="bg-blue-600 h-2 rounded-full transition-all"
-            style={{ width: `${Math.min(streak * 10, 100)}%` }}
-          />
+          <div className="bg-blue-600 h-2 rounded-full transition-all" style={{ width: `${Math.min(streak * 10, 100)}%` }} />
         </div>
       </div>
 
@@ -605,3 +589,4 @@ export function LogTab() {
     </div>
   );
 }
+
