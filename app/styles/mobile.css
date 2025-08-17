@@ -1,0 +1,42 @@
+/* Day 9 Mobile-First Utilities */
+/* DO NOT import yet - will be imported tomorrow */
+
+.screen-container {
+  min-height: 100dvh;
+  padding: 1rem;
+}
+
+.touch-target {
+  min-height: 44px;
+  min-width: 44px;
+}
+
+.bottom-safe-area {
+  padding-bottom: max(env(safe-area-inset-bottom), 16px);
+}
+
+.btn-primary-mobile {
+  background: rgb(147 51 234);
+  color: white;
+  min-height: 44px;
+  padding: 12px 24px;
+  border-radius: 8px;
+  font-weight: 600;
+  font-size: 16px;
+  width: 100%;
+}
+
+.btn-secondary-mobile {
+  background: rgb(243 244 246);
+  color: rgb(55 65 81);
+  min-height: 44px;
+  padding: 12px 24px;
+  border-radius: 8px;
+  font-weight: 600;
+  font-size: 16px;
+}
+
+/* Prevent iOS zoom on inputs */
+input, select, textarea {
+  font-size: 16px !important;
+}

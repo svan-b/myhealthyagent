@@ -1,3 +1,4 @@
+// Day 8 working version - DO NOT DELETE until Day 10
 // app/components/LogTab.tsx
 'use client';
 
@@ -368,8 +369,6 @@ export function LogTab() {
   }
 
   return (
-    // TODO Day 9: Split into 3-screen progressive flow
-    // Issue: Everything crammed on one screen
     <div className="space-y-4" role="region" aria-label="Symptom logger">
       {/* Due Medications Strip */}
       {dueMedications.length > 0 && (
@@ -467,8 +466,6 @@ export function LogTab() {
           </div>
 
           {/* Symptom Selection */}
-          {/* TODO Day 9: Fix selection state visibility  
-              Issue: Only last selected shows purple, not all */}
           <p className="text-sm font-medium mb-2">Select symptoms:</p>
 
           {/* Common Symptoms */}
@@ -555,8 +552,6 @@ export function LogTab() {
             </div>
           </div>
 
-          {/* TODO Day 9: Replace with SeverityPicker component
-              Issue: Slider doesn't drag on mobile, only taps */}
           {/* Severity Slider */}
           <div className="mb-4">
             <div className="flex justify-between mb-2">

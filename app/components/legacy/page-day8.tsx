@@ -1,27 +1,24 @@
+// Day 8 working version - DO NOT DELETE until Day 10
 // app/page.tsx
 'use client';
 
 import { useState } from 'react';
 import dynamic from 'next/dynamic';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
-import { LogTab } from './components/LogTab';
-import { QuickLogFlow } from './components/mobile/QuickLogFlow';
-import { History } from './components/History';
-import { MedicationManager } from './components/MedicationManager';
-import { ReportGenerator } from './components/ReportGenerator';
-import { ThemeToggle } from './components/ThemeToggle';
-import { InstallPrompt } from './components/InstallPrompt';
-import { VisitReport } from './components/VisitReport';
-import { ExportButtons } from './components/ExportButtons';
-import { DeleteDataButton } from './components/DeleteDataButton';
+import { LogTab } from '../LogTab';
+import { History } from '../History';
+import { MedicationManager } from '../MedicationManager';
+import { ReportGenerator } from '../ReportGenerator';
+import { ThemeToggle } from '../ThemeToggle';
+import { InstallPrompt } from '../InstallPrompt';
+import { VisitReport } from '../VisitReport';
+import { ExportButtons } from '../ExportButtons';
+import { DeleteDataButton } from '../DeleteDataButton';
 import { toast } from 'sonner';
 
-const Charts = dynamic(() => import('./components/Charts').then(m => m.Charts), {
+const Charts = dynamic(() => import('../Charts').then(m => m.Charts), {
   ssr: false,
 });
-
-// Feature flag for Day 9 redesign - set to true tomorrow
-const USE_NEW_MOBILE_UI = false;
 
 export default function HomePage() {
   const [activeTab, setActiveTab] = useState<'log' | 'history' | 'charts' | 'medications'>('log');
@@ -48,11 +45,7 @@ export default function HomePage() {
           </TabsList>
           
           <TabsContent value="log">
-            {USE_NEW_MOBILE_UI ? (
-              <QuickLogFlow /> 
-            ) : (
-              <LogTab />
-            )}
+            <LogTab />
           </TabsContent>
           
           <TabsContent value="history">
