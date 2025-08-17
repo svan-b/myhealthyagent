@@ -5,6 +5,7 @@ import { useState, useEffect, useMemo } from 'react';
 import { Button } from '@/components/ui/button';
 import { Card } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
+import { cn } from '@/lib/utils';
 import { Plus, Repeat, Clock, Coffee, Utensils, Pill, X, Milk, CheckCircle, XCircle, AlertCircle } from 'lucide-react';
 import { toast } from 'sonner';
 import { db } from '@/lib/db/client';
@@ -427,17 +428,22 @@ export function LogTab() {
             </div>
             <div className="flex flex-wrap gap-2">
               {contextOptions.map(({ id, label, icon: Icon }) => (
-                <Button
+                <button
                   key={id}
-                  variant={normalizedTags.includes(id) ? 'default' : 'outline'}
-                  size="sm"
+                  type="button"
                   onClick={() => toggleContext(id)}
-                  className="h-8"
+                  className={`
+                    inline-flex items-center justify-center rounded-md text-sm font-medium h-8 px-3
+                    border transition-all focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2
+                    ${normalizedTags.includes(id) 
+                      ? 'bg-blue-500 text-white border-blue-600 hover:bg-blue-600 shadow-md' 
+                      : 'bg-white text-gray-700 border-gray-300 hover:bg-gray-50 dark:bg-gray-800 dark:text-gray-200 dark:border-gray-600 dark:hover:bg-gray-700'}
+                  `}
                   aria-pressed={normalizedTags.includes(id)}
                 >
                   <Icon className="h-3 w-3 mr-1" aria-hidden />
                   {label}
-                </Button>
+                </button>
               ))}
             </div>
             {/* Custom context tag */}
@@ -462,15 +468,19 @@ export function LogTab() {
           {/* Common Symptoms */}
           <div className="flex flex-wrap gap-2 mb-3">
             {commonSymptoms.map((symptom) => (
-              <Button
+              <button
                 key={symptom}
-                variant={selectedSymptoms.includes(symptom) ? 'default' : 'outline'}
-                size="sm"
+                type="button"
                 onClick={() => toggleSymptom(symptom)}
+                className={
+                  selectedSymptoms.includes(symptom)
+                    ? 'inline-flex items-center justify-center rounded-md text-sm font-medium h-8 px-3 border transition-all focus:outline-none focus:ring-2 focus:ring-purple-500 focus:ring-offset-2 bg-purple-500 text-white border-purple-600 hover:bg-purple-600 shadow-md'
+                    : 'inline-flex items-center justify-center rounded-md text-sm font-medium h-8 px-3 border transition-all focus:outline-none focus:ring-2 focus:ring-purple-500 focus:ring-offset-2 bg-white text-gray-700 border-gray-300 hover:bg-gray-50 dark:bg-gray-800 dark:text-gray-200 dark:border-gray-600 dark:hover:bg-gray-700'
+                }
                 aria-pressed={selectedSymptoms.includes(symptom)}
               >
                 {symptom}
-              </Button>
+              </button>
             ))}
           </div>
 
@@ -478,16 +488,22 @@ export function LogTab() {
           {recentSymptoms.length > 0 && (
             <div className="flex flex-wrap gap-2 mb-3">
               {recentSymptoms.map((symptom) => (
-                <Button
+                <button
                   key={symptom}
-                  variant={selectedSymptoms.includes(symptom) ? 'secondary' : 'outline'}
-                  size="sm"
+                  type="button"
                   onClick={() => toggleSymptom(symptom)}
+                  className={`
+                    inline-flex items-center justify-center rounded-md text-sm font-medium h-8 px-3
+                    border transition-all focus:outline-none focus:ring-2 focus:ring-purple-500 focus:ring-offset-2
+                    ${selectedSymptoms.includes(symptom) 
+                      ? 'bg-purple-500 text-white border-purple-600 hover:bg-purple-600 shadow-md' 
+                      : 'bg-white text-gray-700 border-gray-300 hover:bg-gray-50 dark:bg-gray-800 dark:text-gray-200 dark:border-gray-600 dark:hover:bg-gray-700'}
+                  `}
                   aria-pressed={selectedSymptoms.includes(symptom)}
                 >
                   <Clock className="h-3 w-3 mr-1" aria-hidden />
                   {symptom}
-                </Button>
+                </button>
               ))}
             </div>
           )}

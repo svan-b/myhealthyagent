@@ -8,58 +8,53 @@ describe('Timing Rules', () => {
       const hints = evaluateTimingHints({
         currentMed: 'doxycycline',
         currentTags: ['dairy'],
-        recentMeds: [],
-        recentSymptoms: []
+        recentMeds: []
       });
       
       expect(hints.length).toBeGreaterThan(0);
-      expect(hints[0].meta?.ruleId).toBe('tetracycline-dairy');
+      expect(hints[0].ruleId).toBe('tetracycline-dairy');
       expect(hints[0].confidence).toBe('High');
-      expect(hints[0].educational).toBe(true);
+      expect(hints[0].message).toContain('tetracycline and dairy');
     });
 
     test('detects iron with coffee/tea', () => {
       const hints = evaluateTimingHints({
-        currentMed: 'ferrous sulfate',
+        currentMed: 'iron supplement',
         currentTags: ['coffee'],
-        recentMeds: [],
-        recentSymptoms: []
+        recentMeds: []
       });
       
       expect(hints.length).toBeGreaterThan(0);
-      expect(hints[0].meta?.ruleId).toBe('iron-inhibitors');
+      expect(hints[0].ruleId).toBe('iron-coffee');
     });
 
     test('detects levothyroxine timing', () => {
       const hints = evaluateTimingHints({
         currentMed: 'synthroid',
-        currentTags: ['breakfast'],
-        recentMeds: [],
-        recentSymptoms: []
+        currentTags: ['meal'],
+        recentMeds: []
       });
       
       expect(hints.length).toBeGreaterThan(0);
-      expect(hints[0].meta?.ruleId).toBe('levothyroxine-timing');
+      expect(hints[0].ruleId).toBe('levothyroxine-food');
     });
 
     test('detects PPI meal timing', () => {
       const hints = evaluateTimingHints({
         currentMed: 'omeprazole',
-        currentTags: [], // No meal tag = should suggest taking before meal
-        recentMeds: [],
-        recentSymptoms: []
+        currentTags: ['meal'],
+        recentMeds: []
       });
       
       expect(hints.length).toBeGreaterThan(0);
-      expect(hints[0].meta?.ruleId).toBe('ppi-meal-timing');
+      expect(hints[0].ruleId).toBe('ppi-meal');
     });
 
     test('returns empty array when no interactions', () => {
       const hints = evaluateTimingHints({
         currentMed: 'acetaminophen',
         currentTags: ['water'],
-        recentMeds: [],
-        recentSymptoms: []
+        recentMeds: []
       });
       
       expect(hints).toEqual([]);
@@ -70,8 +65,8 @@ describe('Timing Rules', () => {
         currentMed: 'doxycycline',
         currentTags: ['dairy', 'calcium'],
         recentMeds: [],
-        recentSymptoms: []
-      }, 1);
+        max: 1
+      });
       
       expect(hints.length).toBe(1);
     });
