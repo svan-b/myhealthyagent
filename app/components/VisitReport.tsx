@@ -365,9 +365,8 @@ export function VisitReport() {
 
       pdf.setFont('helvetica', 'normal');
       pdf.setFontSize(10);
-          // eslint-disable-next-line @typescript-eslint/no-explicit-any
       const questions = [
-        adherenceMetrics.some((m: any) => m.metrics.adherencePercentage < 80) 
+        adherenceMetrics.some((m: { metrics: { adherencePercentage: number } }) => m.metrics.adherencePercentage < 80) 
           ? 'Should we adjust medication timing for better adherence?'
           : 'Is my current medication schedule optimal?',
         patterns.some(p => p.confidence === 'High') 
