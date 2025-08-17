@@ -279,6 +279,7 @@ export function VisitReport() {
         pdf.setFont('helvetica', 'normal');
         pdf.setFontSize(10);
         
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
         adherenceMetrics.forEach((item: any) => {
           ensureSpace(12);
           const { schedule, metrics } = item;
@@ -364,6 +365,7 @@ export function VisitReport() {
 
       pdf.setFont('helvetica', 'normal');
       pdf.setFontSize(10);
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
       const questions = [
         adherenceMetrics.some((m: any) => m.metrics.adherencePercentage < 80) 
           ? 'Should we adjust medication timing for better adherence?'

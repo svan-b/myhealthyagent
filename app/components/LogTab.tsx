@@ -13,7 +13,7 @@ import { v4 as uuidv4 } from 'uuid';
 import type { MedLog, Symptom, MedicationSchedule, MedicationAdherence } from '@/lib/db/schema';
 // Expose db for testing (remove in production)
 if (typeof window !== 'undefined') {
-  (window as any).db = db;
+  (window as Window & { db: typeof db }).db = db;
 }
 
 export function LogTab() {
