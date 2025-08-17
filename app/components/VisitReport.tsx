@@ -72,16 +72,12 @@ export function VisitReport() {
       const hintPool: TimingHint[] = [];
       const medsForHints = uniqueMeds.slice(0, 2); // Top 2 recent meds
       for (const med of medsForHints) {
-        const hints = evaluateTimingHints(
-          {
-            recentSymptoms: symptoms,
-            recentMeds: meds,
-            currentTags: recentTags,
-            currentMed: med.name,
-            now,
-          },
-          2 // max 2 hints per med
-        );
+        const hints = evaluateTimingHints({
+          currentMed: med.name,
+          currentTags: recentTags,
+          recentMeds: meds.map(m => ({ name: m.name, timestamp: m.timestamp, dosage: m.dose })),
+          max: 2
+        });
         hintPool.push(...hints);
       }
       
@@ -89,7 +85,7 @@ export function VisitReport() {
       const order = { High: 3, Medium: 2, Low: 1 } as const;
       const uniqueHints = new Map<string, TimingHint>();
       for (const hint of hintPool) {
-        const key = hint.meta?.ruleId ?? hint.title;
+        const key = hint.ruleId || JSON.stringify(hint);
         const existing = uniqueHints.get(key);
         if (!existing || order[hint.confidence] > order[existing.confidence]) {
           uniqueHints.set(key, hint);
@@ -339,7 +335,7 @@ export function VisitReport() {
           pdf.text(`[${hint.confidence}]`, margin + 2, y + 3);
           pdf.setTextColor(0);
           
-          const titleLines = pdf.splitTextToSize(hint.title, pageWidth - margin * 2 - 22);
+          const titleLines = pdf.splitTextToSize(hint.message, pageWidth - margin * 2 - 22);
           pdf.setFont('helvetica', 'bold');
           titleLines.forEach((line: string, j: number) => {
             pdf.text(line, margin + 22, y + 3 + j * 4);

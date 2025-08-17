@@ -26,7 +26,7 @@ export interface TopSymptom {
   avgSeverity: number;
 }
 
-export type PatternType = 'temporal' | 'correlation' | 'timing' | 'statistical' | 'cluster';
+export type PatternType = 'temporal' | 'correlation' | 'timing' | 'statistical' | 'cluster' | 'medication-adherence' | 'medication-timing' | 'medication-missed-pattern';
 
 export interface Pattern {
   text: string;                          // human-readable hypothesis
@@ -445,7 +445,7 @@ export async function detectMedicationPatterns(days: number = 30): Promise<Patte
           text: `${schedule.medicationName}: ${metrics.adherencePercentage}% adherence (${metrics.takenDoses}/${metrics.totalDoses} doses taken)`,
           confidence,
           type: 'medication-adherence',
-          meta: {
+          metadata: {
             medicationName: schedule.medicationName,
             adherencePercentage: metrics.adherencePercentage,
           }
@@ -460,7 +460,7 @@ export async function detectMedicationPatterns(days: number = 30): Promise<Patte
           text: `${schedule.medicationName}: ${consistency} timing consistency (±${metrics.timingConsistencyMinutes} min average)`,
           confidence: 'Medium',
           type: 'medication-timing',
-          meta: {
+          metadata: {
             medicationName: schedule.medicationName,
             timingVariance: metrics.timingConsistencyMinutes,
           }
@@ -477,7 +477,7 @@ export async function detectMedicationPatterns(days: number = 30): Promise<Patte
             text: `${schedule.medicationName}: Most doses missed in the ${problemTime} (${maxMissed} times)`,
             confidence: 'Medium',
             type: 'medication-missed-pattern',
-            meta: {
+            metadata: {
               medicationName: schedule.medicationName,
               problemTime,
               missedCount: maxMissed,

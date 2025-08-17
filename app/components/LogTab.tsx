@@ -5,11 +5,10 @@ import { useState, useEffect, useMemo } from 'react';
 import { Button } from '@/components/ui/button';
 import { Card } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
-import { cn } from '@/lib/utils';
 import { Plus, Repeat, Clock, Coffee, Utensils, Pill, X, Milk, CheckCircle, XCircle, AlertCircle } from 'lucide-react';
 import { toast } from 'sonner';
 import { db } from '@/lib/db/client';
-import { evaluateTimingHints } from '@/lib/rules/timing-rules';
+import { evaluateTimingHints, type TimingHint } from '@/lib/rules/timing-rules';
 import { v4 as uuidv4 } from 'uuid';
 import type { MedLog, Symptom, MedicationSchedule, MedicationAdherence } from '@/lib/db/schema';
 
@@ -75,8 +74,11 @@ export function LogTab() {
       const nowMinutes = now.getHours() * 60 + now.getMinutes();
       const todayStr = now.toISOString().split('T')[0];
 
-      type DueItem = { schedule: MedicationSchedule; scheduledTime: string; status: 'due' | 'overdue' };
-      const due: DueItem[] = [];
+      const due: Array<{
+        schedule: MedicationSchedule;
+        scheduledTime: string;
+        status: 'due' | 'overdue';
+      }> = [];
 
       for (const schedule of schedules) {
         if (schedule.frequency === 'as-needed') continue;
@@ -279,7 +281,7 @@ export function LogTab() {
       const [recentMeds, allSymptoms]: [MedLog[], Symptom[]] = await Promise.all([db.getRecentMeds(24), db.getAllSymptoms()]);
 
       // Build a pool of hints to show
-      const hintPool: any[] = [];
+      const hintPool: TimingHint[] = [];
 
       if (medLogged) {
         hintPool.push(
@@ -314,15 +316,15 @@ export function LogTab() {
         const uniq = new Map<string, (typeof hintPool)[number]>();
         for (const h of hintPool) {
           // tolerate either shape; TimingHint from rules has ruleId/message, some UI might supply title/meta
-          const key = (h.meta && h.meta.ruleId) || h.ruleId || h.title || JSON.stringify(h);
+          const key = h.ruleId || JSON.stringify(h);
           const prev = uniq.get(key);
           if (!prev || order[h.confidence] > order[prev.confidence]) uniq.set(key, h);
         }
         Array.from(uniq.values())
           .slice(0, 2)
-          .forEach((hint: any) => {
-            toast(hint.title || hint.message, {
-              description: hint.message,
+          .forEach((hint: TimingHint) => {
+            toast(hint.message, {
+              description: `Confidence: ${hint.confidence}`,
               duration: 8000,
               action: hint.confidence === 'High' ? { label: 'Got it', onClick: () => {} } : undefined,
             });
