@@ -117,22 +117,33 @@ test.describe('Critical User Journey', () => {
 
   test('Visit report generation', async ({ page }) => {
     await page.goto('http://localhost:3000');
-    await page.waitForLoadState('networkidle');
     
-    // Ensure we have some data
-    await page.click('button:has-text("Log Symptoms")');
+    // New mobile UI - symptoms are directly visible
     await page.click('button:has-text("Fatigue")');
-    await page.click('button:has-text("Save")');
+    await page.click('button:has-text("Next")');
+    await page.click('button:has-text("Medium")');
+    await page.click('button:has-text("Skip")');
     await page.waitForSelector('text=/Logged/');
     
-    const pdfStart = Date.now();
-    await page.click('button:has-text("Generate Visit Report")');
+    // Navigate to History tab to verify
+    await page.click('button:has-text("History")');
+    await page.waitForSelector('text=/Fatigue/');
     
-    // Wait for PDF generation
-    const downloadPromise = page.waitForEvent('download', { timeout: 10000 });
-    const download = await downloadPromise;
+    // Go back to Log tab
+    await page.click('button:has-text("Log")');
+    
+    // Open export menu
+    await page.click('button:has-text("Export & Reports")');
+    
+    // Generate report
+    const pdfStart = Date.now();
+    const [download] = await Promise.all([
+      page.waitForEvent('download'),
+      page.click('button:has-text("Generate Visit Report")')
+    ]);
     const pdfDuration = Date.now() - pdfStart;
     
+    expect(download).toBeTruthy();
     expect(download.suggestedFilename()).toContain('Report');
     expect(pdfDuration).toBeLessThan(PERF_TARGETS.pdfGenerate.p95);
     console.log(`PDF generated in ${pdfDuration}ms`);

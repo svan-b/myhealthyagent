@@ -9,6 +9,7 @@ import { SeverityPicker } from './SeverityPicker';
 import { BottomActions } from './BottomActions';
 import { db } from '@/lib/db/client';
 import { v4 as uuidv4 } from 'uuid';
+import TogglePill from '../ui/TogglePill';
 
 const COMMON_SYMPTOMS = [
   'Headache', 'Fatigue', 'Nausea', 'Bloating', 'Pain', 
@@ -96,32 +97,19 @@ export function QuickLogFlow() {
   // Screen 1: Symptom Selection
   if (screen === 'symptoms') {
     return (
-      <div className="flex flex-col h-full p-4 pb-20">
+      <div className="flex flex-col min-h-screen p-4">
         <h2 className="text-xl font-semibold mb-4">What&apos;s bothering you?</h2>
         
         {/* Common symptoms grid */}
         <div className="grid grid-cols-2 gap-2 mb-4">
           {COMMON_SYMPTOMS.map(symptom => (
-            <button
+            <TogglePill
               key={symptom}
-              type="button"
-              aria-pressed={selectedSymptoms.includes(symptom)}
-              onPointerDown={(e) => {
-                e.preventDefault();
-                toggleSymptom(symptom);
-              }}
-              className={`
-                w-full px-3 py-3 rounded-lg border-2 font-medium
-                transition-all duration-150 active:scale-95
-                ${selectedSymptoms.includes(symptom)
-                  ? 'bg-purple-500 text-white border-purple-500 shadow-md'
-                  : 'bg-white text-gray-700 border-gray-200 hover:border-purple-300'
-                }
-              `}
-              style={{ touchAction: 'manipulation' }}
-            >
-              {symptom}
-            </button>
+              label={symptom}
+              selected={selectedSymptoms.includes(symptom)}
+              onToggle={toggleSymptom}
+              color="violet"
+            />
           ))}
         </div>
 
@@ -164,7 +152,7 @@ export function QuickLogFlow() {
   // Screen 2: Severity
   if (screen === 'severity') {
     return (
-      <div className="flex flex-col h-full p-4 pb-20">
+      <div className="flex flex-col min-h-screen p-4">
         <button 
           onClick={() => setScreen('symptoms')}
           className="flex items-center text-gray-600 mb-4"
@@ -193,7 +181,7 @@ export function QuickLogFlow() {
   // Screen 3: Context (Optional)
   if (screen === 'context') {
     return (
-      <div className="flex flex-col h-full p-4 pb-20">
+      <div className="flex flex-col min-h-screen p-4">
         <button 
           onClick={() => setScreen('severity')}
           className="flex items-center text-gray-600 mb-4"
@@ -206,26 +194,13 @@ export function QuickLogFlow() {
 
         <div className="grid grid-cols-2 gap-2 mb-4">
           {CONTEXT_OPTIONS.map(context => (
-            <button
+            <TogglePill
               key={context}
-              type="button"
-              aria-pressed={selectedContext.includes(context)}
-              onPointerDown={(e) => {
-                e.preventDefault(); // Prevent any default touch behavior
-                toggleContext(context);
-              }}
-              className={`
-                w-full px-3 py-3 rounded-lg border-2 font-medium
-                transition-all duration-150 active:scale-95
-                ${selectedContext.includes(context)
-                  ? 'bg-blue-500 text-white border-blue-500 shadow-md'
-                  : 'bg-white text-gray-700 border-gray-200 hover:border-blue-300'
-                }
-              `}
-              style={{ touchAction: 'manipulation' }} // Removes 300ms delay on mobile
-            >
-              {context}
-            </button>
+              label={context}
+              selected={selectedContext.includes(context)}
+              onToggle={toggleContext}
+              color="blue"
+            />
           ))}
         </div>
 

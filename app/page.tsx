@@ -14,6 +14,8 @@ import { InstallPrompt } from './components/InstallPrompt';
 import { VisitReport } from './components/VisitReport';
 import { ExportButtons } from './components/ExportButtons';
 import { DeleteDataButton } from './components/DeleteDataButton';
+import { Button } from '@/components/ui/button';
+import { Download } from 'lucide-react';
 import { toast } from 'sonner';
 
 const Charts = dynamic(() => import('./components/Charts').then(m => m.Charts), {
@@ -25,6 +27,7 @@ const USE_NEW_MOBILE_UI = true;
 
 export default function HomePage() {
   const [activeTab, setActiveTab] = useState<'log' | 'history' | 'charts' | 'medications'>('log');
+  const [showExportMenu, setShowExportMenu] = useState(false);
   
   const handleStartEdit = () => {
     setActiveTab('log');
@@ -71,13 +74,28 @@ export default function HomePage() {
         <InstallPrompt />
         
         {/* Report and Export Actions */}
-        <div className="mt-6 space-y-3">
-          <div className="flex gap-2">
-            <VisitReport />
-            <ReportGenerator />
+        <div className="mt-6">
+          <div className="flex justify-center">
+            <Button 
+              variant="outline" 
+              onClick={() => setShowExportMenu(!showExportMenu)}
+              className="gap-2"
+            >
+              <Download className="h-4 w-4" />
+              Export & Reports
+            </Button>
           </div>
-          <ExportButtons />
-          <DeleteDataButton />
+
+          {showExportMenu && (
+            <div className="mt-4 p-4 border rounded-lg bg-gray-50 space-y-2">
+              <div className="flex gap-2">
+                <VisitReport />
+                <ReportGenerator />
+              </div>
+              <ExportButtons />
+              <DeleteDataButton />
+            </div>
+          )}
         </div>
         
         {/* Privacy notice */}
