@@ -4,36 +4,43 @@ type TogglePillProps = {
   label: string;
   selected: boolean;
   onToggle: (label: string) => void;
-  color?: "blue" | "violet" | "amber";
+  color?: "blue" | "violet" | "amber" | "green";
   disabled?: boolean;
+  size?: "sm" | "md" | "lg";
 };
 
 const colorClasses = (on: boolean, color: NonNullable<TogglePillProps["color"]>) => {
-  const active: Record<string,string> = {
-    violet: "bg-purple-500 border-purple-500 text-white",
-    blue: "bg-blue-500 border-blue-500 text-white",
-    amber: "bg-yellow-500 border-yellow-500 text-white",
-  };
-  const idle: Record<string,string> = {
-    violet: "bg-white border-gray-300 text-gray-700 hover:border-purple-400",
-    blue: "bg-white border-gray-300 text-gray-700 hover:border-blue-400",
-    amber: "bg-white border-gray-300 text-gray-700 hover:border-yellow-400",
-  };
-  return on ? active[color] : idle[color];
+  if (on) {
+    switch(color) {
+      case "violet": return "bg-purple-500 border-purple-500 text-white";
+      case "blue": return "bg-blue-500 border-blue-500 text-white";
+      case "amber": return "bg-yellow-500 border-yellow-500 text-white";
+      case "green": return "bg-green-500 border-green-500 text-white";
+    }
+  }
+  return "bg-white border-gray-300 text-gray-900 hover:border-gray-400";
+};
+
+const sizeClasses = (size: NonNullable<TogglePillProps["size"]>) => {
+  switch(size) {
+    case "sm": return "px-2 py-1.5 text-sm";
+    case "lg": return "px-4 py-3 text-lg";
+    default: return "px-3 py-2.5 text-base";
+  }
 };
 
 const TogglePill = React.memo<TogglePillProps>(function TogglePill({
-  label,
-  selected,
-  onToggle,
-  color = "blue",
-  disabled = false,
+  label, selected, onToggle, color = "blue", disabled = false, size = "md"
 }) {
   const handlePointerDown = React.useCallback(
     (e: React.PointerEvent<HTMLButtonElement>) => {
       e.preventDefault();
       if (disabled) return;
       onToggle(label);
+      // Subtle haptic for clinical feel
+      if ('vibrate' in navigator) {
+        navigator.vibrate(5);
+      }
     },
     [disabled, label, onToggle]
   );
@@ -42,10 +49,13 @@ const TogglePill = React.memo<TogglePillProps>(function TogglePill({
     <button
       type="button"
       aria-pressed={selected}
+      disabled={disabled}
       className={`
-        w-full rounded-xl border-2 px-3 py-3 text-base font-medium
-        transition-all duration-150 active:scale-95
+        w-full rounded-lg border-2 font-medium
+        transition-all duration-150 active:scale-[0.98]
+        disabled:opacity-50 disabled:cursor-not-allowed
         ${colorClasses(selected, color)}
+        ${sizeClasses(size)}
       `}
       onPointerDown={handlePointerDown}
       style={{ touchAction: 'manipulation' }}

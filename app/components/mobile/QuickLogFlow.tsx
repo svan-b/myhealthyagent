@@ -97,7 +97,7 @@ export function QuickLogFlow() {
   // Screen 1: Symptom Selection
   if (screen === 'symptoms') {
     return (
-      <div className="flex flex-col min-h-screen p-4">
+      <div className="flex flex-col min-h-screen p-4 pb-32">
         <h2 className="text-xl font-semibold mb-4">What&apos;s bothering you?</h2>
         
         {/* Common symptoms grid */}
@@ -121,7 +121,7 @@ export function QuickLogFlow() {
             onChange={(e) => setCustomSymptom(e.target.value)}
             onKeyPress={(e) => e.key === 'Enter' && addCustomSymptom()}
             placeholder="Other symptom..."
-            className="flex-1 px-3 py-2 border rounded-lg"
+            className="flex-1 px-3 py-2 border rounded-lg text-base"
           />
           <Button 
             onClick={addCustomSymptom}
@@ -152,7 +152,7 @@ export function QuickLogFlow() {
   // Screen 2: Severity
   if (screen === 'severity') {
     return (
-      <div className="flex flex-col min-h-screen p-4">
+      <div className="flex flex-col min-h-screen p-4 pb-32">
         <button 
           onClick={() => setScreen('symptoms')}
           className="flex items-center text-gray-600 mb-4"
@@ -181,7 +181,7 @@ export function QuickLogFlow() {
   // Screen 3: Context (Optional)
   if (screen === 'context') {
     return (
-      <div className="flex flex-col min-h-screen p-4">
+      <div className="flex flex-col min-h-screen p-4 pb-32">
         <button 
           onClick={() => setScreen('severity')}
           className="flex items-center text-gray-600 mb-4"

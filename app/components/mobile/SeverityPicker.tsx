@@ -9,10 +9,30 @@ interface Props {
 }
 
 const SEVERITY_OPTIONS = [
-  { value: 'low' as Severity, label: 'Low', range: '1-3', emoji: '😐' },
-  { value: 'medium' as Severity, label: 'Medium', range: '4-6', emoji: '😕' },
-  { value: 'high' as Severity, label: 'High', range: '7-8', emoji: '😣' },
-  { value: 'severe' as Severity, label: 'Severe', range: '9-10', emoji: '😫' },
+  { 
+    value: 'low' as Severity, 
+    label: 'Low', 
+    range: '1-3',
+    description: 'Mild discomfort'
+  },
+  { 
+    value: 'medium' as Severity, 
+    label: 'Medium', 
+    range: '4-6',
+    description: 'Moderate impact'
+  },
+  { 
+    value: 'high' as Severity, 
+    label: 'High', 
+    range: '7-8',
+    description: 'Significant impact'
+  },
+  { 
+    value: 'severe' as Severity, 
+    label: 'Severe', 
+    range: '9-10',
+    description: 'Severe/unbearable'
+  },
 ];
 
 export function SeverityPicker({ value, onChange }: Props) {
@@ -21,12 +41,16 @@ export function SeverityPicker({ value, onChange }: Props) {
       {SEVERITY_OPTIONS.map(option => (
         <button
           key={option.value}
-          onClick={() => onChange(option.value)}
+          type="button"
+          onClick={() => {
+            onChange(option.value);
+            if ('vibrate' in navigator) navigator.vibrate(5);
+          }}
           className={`
             min-h-[80px] rounded-xl border-2 transition-all p-4
             ${value === option.value 
-              ? 'text-white shadow-lg scale-105' 
-              : 'bg-white border-gray-300 text-gray-700 hover:border-gray-400'}
+              ? 'border-transparent shadow-lg scale-105' 
+              : 'bg-white border-gray-300 hover:border-gray-400'}
           `}
           style={{
             backgroundColor: value === option.value ? 
@@ -36,12 +60,13 @@ export function SeverityPicker({ value, onChange }: Props) {
             borderColor: value === option.value ?
               (option.value === 'low' ? '#10b981' : 
                option.value === 'medium' ? '#eab308' :
-               option.value === 'high' ? '#f97316' : '#ef4444') : undefined
+               option.value === 'high' ? '#f97316' : '#ef4444') : undefined,
+            color: value === option.value ? 'white' : undefined
           }}
         >
-          <div className="text-2xl mb-1">{option.emoji}</div>
-          <div className="font-semibold">{option.label}</div>
-          <div className="text-xs opacity-75">{option.range}</div>
+          <div className="font-bold text-lg">{option.label}</div>
+          <div className="text-sm opacity-90">{option.range}</div>
+          <div className="text-sm mt-1 opacity-75">{option.description}</div>
         </button>
       ))}
     </div>

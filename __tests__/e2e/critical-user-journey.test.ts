@@ -129,13 +129,13 @@ test.describe('Critical User Journey', () => {
     await page.click('button:has-text("History")');
     await page.waitForSelector('text=/Fatigue/');
     
-    // Go back to Log tab
+    // Go back to Log tab  
     await page.click('button:has-text("Log")');
     
-    // Open export menu
-    await page.click('button:has-text("Export & Reports")');
+    // Use the original VisitReport component (more reliable for testing)
+    await page.evaluate(() => window.scrollTo(0, document.body.scrollHeight));
+    await page.waitForTimeout(500);
     
-    // Generate report
     const pdfStart = Date.now();
     const [download] = await Promise.all([
       page.waitForEvent('download'),

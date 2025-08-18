@@ -51,3 +51,30 @@ input:focus {
   outline: 2px solid rgb(168 85 247);
   outline-offset: 2px;
 }
+
+/* Clinical UI improvements */
+.clinical-container {
+  max-width: 640px;
+  margin: 0 auto;
+}
+
+/* Ensure bottom content is never hidden */
+.with-bottom-bar {
+  padding-bottom: 8rem;
+}
+
+/* Professional focus states */
+button:focus-visible {
+  outline: 2px solid #3b82f6;
+  outline-offset: 2px;
+}
+
+/* Remove tap highlight on iOS */
+button {
+  -webkit-tap-highlight-color: transparent;
+}
+
+/* Ensure safe area on iOS */
+.safe-bottom {
+  padding-bottom: env(safe-area-inset-bottom);
+}
