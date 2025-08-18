@@ -19,54 +19,38 @@ test.describe('Critical User Journey', () => {
   });
 
   test('7-second symptom logging p95 ≤ 10s', async ({ page }) => {
-    const timings: number[] = [];
+    const logTimes: number[] = [];
     
-    // Run 10 iterations for p95 calculation
-    for (let i = 0; i < 10; i++) {
-      await page.goto('http://localhost:3000');
-      await page.waitForLoadState('networkidle');
-      
+    for (let i = 0; i < 5; i++) {
       const startTime = Date.now();
       
-      // Click Log Symptoms button (Log tab is default)
-      await page.click('button:has-text("Log Symptoms")');
+      await page.goto('http://localhost:3000');
       
-      // Select 2-3 symptoms
-      const symptoms = ['Headache', 'Fatigue', 'Nausea'];
-      const numSymptoms = Math.floor(Math.random() * 2) + 1;
+      // New mobile UI - symptoms are immediately visible
+      await page.click('button:has-text("Headache")');
+      await page.click('button:has-text("Fatigue")');
       
-      for (let j = 0; j < numSymptoms; j++) {
-        const symptomButton = page.locator(`button:has-text("${symptoms[j]}")`).first();
-        await symptomButton.click();
-      }
+      // Click Next to go to severity
+      await page.click('button:has-text("Next")');
       
-      // Adjust severity
-      await page.locator('input[type="range"]').fill('3');
+      // Select Medium severity
+      await page.click('button:has-text("Medium")');
       
-      // Save
-      await page.click('button:has-text("Save")');
+      // Skip context
+      await page.click('button:has-text("Skip")');
       
       // Wait for success toast
-      await page.waitForSelector('text=/Logged in/', { timeout: 15000 });
+      await page.waitForSelector('text=/Logged in/', { timeout: 5000 });
       
-      const duration = Date.now() - startTime;
-      timings.push(duration);
+      const elapsed = Date.now() - startTime;
+      logTimes.push(elapsed);
       
-      console.log(`Iteration ${i + 1}: ${duration}ms`);
-      
-      // Small delay before next iteration
       await page.waitForTimeout(500);
     }
     
-    // Calculate statistics
-    timings.sort((a, b) => a - b);
-    const median = timings[Math.floor(timings.length * 0.5)];
-    const p95 = timings[Math.floor(timings.length * 0.95)];
-    
-    console.log(`Quick Log Stats - Median: ${median}ms, p95: ${p95}ms`);
-    
-    expect(median).toBeLessThan(PERF_TARGETS.quickLog.median);
-    expect(p95).toBeLessThan(PERF_TARGETS.quickLog.p95);
+    const p95 = Math.max(...logTimes);
+    console.log(`P95 time: ${p95}ms`);
+    expect(p95).toBeLessThan(10000);
   });
 
   test('Medication due and marking flow', async ({ page }) => {

@@ -1,42 +1,53 @@
-/* Day 9 Mobile-First Utilities */
-/* DO NOT import yet - will be imported tomorrow */
+/* app/styles/mobile.css */
 
-.screen-container {
-  min-height: 100dvh;
-  padding: 1rem;
+/* Mobile-first optimizations */
+@media (max-width: 768px) {
+  /* Better touch targets */
+  button {
+    min-height: 44px;
+  }
+  
+  /* Fix tabs on mobile */
+  .tabs-list {
+    width: 100%;
+    justify-content: space-around;
+  }
+  
+  /* Full-width cards */
+  .card {
+    border-radius: 0;
+    border-left: none;
+    border-right: none;
+  }
+  
+  /* Better spacing */
+  .container {
+    padding: 0;
+  }
+  
+  /* Fix bottom spacing for fixed buttons */
+  .pb-20 {
+    padding-bottom: 5rem;
+  }
 }
 
-.touch-target {
-  min-height: 44px;
-  min-width: 44px;
+/* Fix for iOS safe areas */
+@supports (padding: max(0px)) {
+  .fixed.bottom-0 {
+    padding-bottom: max(1rem, env(safe-area-inset-bottom));
+  }
 }
 
-.bottom-safe-area {
-  padding-bottom: max(env(safe-area-inset-bottom), 16px);
-}
-
-.btn-primary-mobile {
-  background: rgb(147 51 234);
+/* Purple selection states */
+.symptom-selected {
+  background-color: rgb(168 85 247);
   color: white;
-  min-height: 44px;
-  padding: 12px 24px;
-  border-radius: 8px;
-  font-weight: 600;
-  font-size: 16px;
-  width: 100%;
+  border-color: rgb(168 85 247);
+  box-shadow: 0 4px 6px -1px rgb(0 0 0 / 0.1);
 }
 
-.btn-secondary-mobile {
-  background: rgb(243 244 246);
-  color: rgb(55 65 81);
-  min-height: 44px;
-  padding: 12px 24px;
-  border-radius: 8px;
-  font-weight: 600;
-  font-size: 16px;
-}
-
-/* Prevent iOS zoom on inputs */
-input, select, textarea {
-  font-size: 16px !important;
+/* Better input focus */
+input:focus {
+  outline: 2px solid rgb(168 85 247);
+  outline-offset: 2px;
 }

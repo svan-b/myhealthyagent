@@ -5,6 +5,7 @@ import { Providers } from './providers';
 import { Toaster } from 'sonner';
 import ServiceWorkerProvider from './components/ServiceWorkerProvider';
 import { OfflineIndicator } from './components/OfflineIndicator';
+import './styles/mobile.css';
 
 const inter = Inter({ subsets: ['latin'] });
 

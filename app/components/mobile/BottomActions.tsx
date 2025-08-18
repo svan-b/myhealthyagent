@@ -1,17 +1,46 @@
-// Day 9: iOS-safe bottom action bar
-
+// app/components/mobile/BottomActions.tsx
 'use client';
 
-import { ReactNode } from 'react';
+import { Button } from '@/components/ui/button';
 
-interface BottomActionsProps {
-  children: ReactNode;
+interface Props {
+  primaryLabel: string;
+  primaryIcon?: React.ReactNode;
+  onPrimary: () => void;
+  primaryDisabled?: boolean;
+  secondaryLabel?: string;
+  onSecondary?: () => void;
 }
 
-export function BottomActions({ children }: BottomActionsProps) {
+export function BottomActions({
+  primaryLabel,
+  primaryIcon,
+  onPrimary,
+  primaryDisabled = false,
+  secondaryLabel,
+  onSecondary
+}: Props) {
   return (
-    <div className="fixed inset-x-0 bottom-0 px-4 pt-3 pb-[max(env(safe-area-inset-bottom),16px)] bg-white/95 backdrop-blur border-t">
-      <div className="flex gap-3">{children}</div>
+    <div className="fixed bottom-0 left-0 right-0 bg-white border-t p-4 flex gap-3">
+      {secondaryLabel && onSecondary && (
+        <Button
+          variant="outline"
+          size="lg"
+          onClick={onSecondary}
+          className="flex-1"
+        >
+          {secondaryLabel}
+        </Button>
+      )}
+      <Button
+        size="lg"
+        onClick={onPrimary}
+        disabled={primaryDisabled}
+        className="flex-1 gap-2"
+      >
+        {primaryLabel}
+        {primaryIcon}
+      </Button>
     </div>
   );
 }

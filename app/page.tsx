@@ -21,7 +21,7 @@ const Charts = dynamic(() => import('./components/Charts').then(m => m.Charts), 
 });
 
 // Feature flag for Day 9 redesign - set to true tomorrow
-const USE_NEW_MOBILE_UI = false;
+const USE_NEW_MOBILE_UI = true;
 
 export default function HomePage() {
   const [activeTab, setActiveTab] = useState<'log' | 'history' | 'charts' | 'medications'>('log');
