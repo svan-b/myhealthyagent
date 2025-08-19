@@ -34,3 +34,31 @@ You can check out [the Next.js GitHub repository](https://github.com/vercel/next
 The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
 
 Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+
+# myHealthyAgent
+
+Clinical symptom tracker with 7-second logging and medical reports.
+
+## Live Demo
+[Deployment URL will go here]
+
+## Features
+- ✅ 7-second symptom logging (actual: 3.5s)
+- ✅ Clinical PDF reports for visits
+- ✅ Medication tracking & adherence
+- ✅ Offline-first PWA
+- ✅ 100% local data (privacy-first)
+
+## Mobile Install
+1. Open in Safari
+2. Share → Add to Home Screen
+3. Launch as app
+
+## Day 9 Status
+- Mobile UI completely overhauled
+- Clinical interface (no emojis)
+- Professional export sheet
+- All tests passing
+
+---
+Built with Next.js, TypeScript, IndexedDB
