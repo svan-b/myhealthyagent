@@ -5,10 +5,10 @@
 import { useState } from 'react';
 import dynamic from 'next/dynamic';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
-import { LogTab } from '../LogTab';
+// import { LogTab } from '../LogTab'; // Temporarily commented - component was deleted
 import { History } from '../History';
 import { MedicationManager } from '../MedicationManager';
-import { ReportGenerator } from '../ReportGenerator';
+// import { ReportGenerator } from '../ReportGenerator';
 import { ThemeToggle } from '../ThemeToggle';
 import { InstallPrompt } from '../InstallPrompt';
 import { VisitReport } from '../VisitReport';
@@ -45,7 +45,8 @@ export default function HomePage() {
           </TabsList>
           
           <TabsContent value="log">
-            <LogTab />
+            {/* <LogTab /> */}
+            <div>Legacy LogTab component not available</div>
           </TabsContent>
           
           <TabsContent value="history">
@@ -67,7 +68,7 @@ export default function HomePage() {
         <div className="mt-6 space-y-3">
           <div className="flex gap-2">
             <VisitReport />
-            <ReportGenerator />
+            {/* <ReportGenerator /> */}
           </div>
           <ExportButtons />
           <DeleteDataButton />

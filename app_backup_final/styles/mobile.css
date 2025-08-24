@@ -1,0 +1,80 @@
+/* app/styles/mobile.css */
+
+/* Mobile-first optimizations */
+@media (max-width: 768px) {
+  /* Better touch targets */
+  button {
+    min-height: 44px;
+  }
+  
+  /* Fix tabs on mobile */
+  .tabs-list {
+    width: 100%;
+    justify-content: space-around;
+  }
+  
+  /* Full-width cards */
+  .card {
+    border-radius: 0;
+    border-left: none;
+    border-right: none;
+  }
+  
+  /* Better spacing */
+  .container {
+    padding: 0;
+  }
+  
+  /* Fix bottom spacing for fixed buttons */
+  .pb-20 {
+    padding-bottom: 5rem;
+  }
+}
+
+/* Fix for iOS safe areas */
+@supports (padding: max(0px)) {
+  .fixed.bottom-0 {
+    padding-bottom: max(1rem, env(safe-area-inset-bottom));
+  }
+}
+
+/* Purple selection states */
+.symptom-selected {
+  background-color: rgb(168 85 247);
+  color: white;
+  border-color: rgb(168 85 247);
+  box-shadow: 0 4px 6px -1px rgb(0 0 0 / 0.1);
+}
+
+/* Better input focus */
+input:focus {
+  outline: 2px solid rgb(168 85 247);
+  outline-offset: 2px;
+}
+
+/* Clinical UI improvements */
+.clinical-container {
+  max-width: 640px;
+  margin: 0 auto;
+}
+
+/* Ensure bottom content is never hidden */
+.with-bottom-bar {
+  padding-bottom: 8rem;
+}
+
+/* Professional focus states */
+button:focus-visible {
+  outline: 2px solid #3b82f6;
+  outline-offset: 2px;
+}
+
+/* Remove tap highlight on iOS */
+button {
+  -webkit-tap-highlight-color: transparent;
+}
+
+/* Ensure safe area on iOS */
+.safe-bottom {
+  padding-bottom: env(safe-area-inset-bottom);
+}

@@ -3,7 +3,7 @@
 
 import { useState } from 'react';
 import { Button } from '@/components/ui/button';
-import { Download, FileJson, FileSpreadsheet } from 'lucide-react';
+import { FileJson, FileSpreadsheet } from 'lucide-react';
 import { db } from '@/lib/db/client';
 import { toast } from 'sonner';
 import { format } from 'date-fns';

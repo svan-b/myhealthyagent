@@ -10,7 +10,7 @@ import { evaluateTimingHints, type TimingHint } from '@/lib/rules/timing-rules';
 import { toast } from 'sonner';
 import { subDays, format, addHours } from 'date-fns';
 import jsPDF from 'jspdf';
-import type { Symptom, MedLog, MedicationSchedule } from '@/lib/db/schema';
+import type { Symptom, MedLog } from '@/lib/db/schema';
 import { detectMedicationPatterns } from '@/lib/report/insights';
 import { calculateAdherence } from '@/lib/medication/adherence';
 
@@ -31,7 +31,7 @@ export function VisitReport() {
       
       // Fetch medication schedules and adherence
       const schedules = await db.getMedicationSchedules();
-      const medicationPatterns = await detectMedicationPatterns(30);
+      await detectMedicationPatterns(30);
       
       // Calculate adherence for each active schedule
       const adherenceMetrics = [];

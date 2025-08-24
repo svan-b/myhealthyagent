@@ -1,170 +1,239 @@
 'use client';
 
 import { useState } from 'react';
-import { Button } from '@/components/ui/button';
-import { FileText, Download, Share2 } from 'lucide-react';
 import { db } from '@/lib/db/client';
-import { format } from 'date-fns';
+import { format, subDays } from 'date-fns';
 import { toast } from 'sonner';
+import { detectPatterns } from '@/lib/report/insights';
 
-export function ReportGenerator() {
+export function useReportGenerator() {
   const [generating, setGenerating] = useState(false);
 
-  const generatePDF = async () => {
+  const generateVisitSummary = async () => {
     setGenerating(true);
     try {
       const jsPDF = (await import('jspdf')).default;
-      const symptoms = await db.getAllSymptoms();
       const doc = new jsPDF();
       
-      // Header
-      doc.setFontSize(20);
-      doc.text('Symptom Report', 20, 20);
-      
-      doc.setFontSize(10);
-      doc.text(`Generated: ${format(new Date(), 'PPP')}`, 20, 30);
-      doc.text(`Total entries: ${symptoms.length}`, 20, 36);
-      
-      // Sort symptoms by date (newest first)
-      const sortedSymptoms = symptoms
-        .sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime())
-        .slice(0, 30); // Take last 30 for PDF
-      
-      // Content
-      let yPosition = 50;
+      // Get data for last 30 days
+      const endDate = new Date();
+      const startDate = subDays(endDate, 30);
+      const symptoms = await db.getAllSymptoms();
+      const recentSymptoms = symptoms.filter(s => 
+        new Date(s.timestamp) >= startDate && new Date(s.timestamp) <= endDate
+      );
+
+      // Professional header with branding
+      doc.setFillColor(6, 182, 212); // Cyan-600
+      doc.rect(0, 0, 210, 30, 'F');
+      doc.setTextColor(255, 255, 255);
+      doc.setFontSize(18);
+      doc.setFont('helvetica', 'bold');
+      doc.text('myHealthyAgent', 15, 15);
       doc.setFontSize(12);
-      doc.text('Recent Symptoms (Last 30 entries):', 20, yPosition);
-      yPosition += 10;
+      doc.setFont('helvetica', 'normal');
+      doc.text('Visit Summary Report', 15, 23);
       
+      // Report metadata
+      doc.setTextColor(0, 0, 0);
       doc.setFontSize(10);
-      sortedSymptoms.forEach((symptom, index) => {
-        if (yPosition > 270) { // Start new page if needed
-          doc.addPage();
-          yPosition = 20;
-        }
-        
-        const date = format(new Date(symptom.timestamp), 'MM/dd/yy h:mm a');
-        const line = `${date} - ${symptom.name} (${symptom.severity}/10)`;
-        doc.text(line, 20, yPosition);
-        
-        if (symptom.notes) {
-          yPosition += 5;
-          const notes = symptom.notes.substring(0, 60);
-          doc.setFontSize(8);
-          doc.text(`  Notes: ${notes}`, 20, yPosition);
-          doc.setFontSize(10);
-        }
-        
-        yPosition += 8;
-      });
-      
-      // Add summary stats
-      doc.addPage();
+      doc.text(`Report Date: ${format(new Date(), 'MMMM d, yyyy')}`, 15, 40);
+      doc.text(`Period: ${format(startDate, 'MMM d')} - ${format(endDate, 'MMM d, yyyy')}`, 15, 46);
+      doc.text(`Total Entries: ${recentSymptoms.length}`, 15, 52);
+
+      // Key Insights Section
       doc.setFontSize(14);
-      doc.text('Summary Statistics', 20, 20);
-      
+      doc.setFont('helvetica', 'bold');
+      doc.text('Key Insights for Your Doctor', 15, 65);
+      doc.setFont('helvetica', 'normal');
       doc.setFontSize(10);
-      const symptomCounts: { [key: string]: number } = {};
-      symptoms.forEach(s => {
-        symptomCounts[s.name] = (symptomCounts[s.name] || 0) + 1;
-      });
-      
-      const topSymptoms = Object.entries(symptomCounts)
-        .sort((a, b) => b[1] - a[1])
-        .slice(0, 10);
-      
-      let statY = 35;
-      doc.text('Top Symptoms:', 20, statY);
-      statY += 8;
-      
-      topSymptoms.forEach(([name, count]) => {
-        doc.text(`• ${name}: ${count} times`, 25, statY);
-        statY += 6;
-      });
-      
-      // Average severity
-      const avgSeverity = symptoms.length > 0
-        ? (symptoms.reduce((sum, s) => sum + s.severity, 0) / symptoms.length).toFixed(1)
-        : 0;
-      
-      statY += 10;
-      doc.text(`Average Severity: ${avgSeverity}/10`, 20, statY);
-      
-      // Save PDF
-      doc.save(`symptom-report-${format(new Date(), 'yyyy-MM-dd')}.pdf`);
-      toast.success('PDF Report generated!');
+
+      // Calculate insights
+      const patterns = await detectPatterns(recentSymptoms, { lookbackDays: 30 });
+      let yPos = 75;
+
+      if (patterns.length > 0) {
+        doc.text('Detected Patterns:', 15, yPos);
+        yPos += 7;
+        patterns.slice(0, 3).forEach(pattern => {
+          doc.text(`• ${pattern.text} (${pattern.confidence} confidence)`, 20, yPos);
+          yPos += 6;
+        });
+      } else {
+        doc.text('• Continue tracking for pattern detection (14+ days needed)', 20, yPos);
+        yPos += 6;
+      }
+
+      // Symptom frequency summary
+      yPos += 5;
+      doc.setFont('helvetica', 'bold');
+      doc.text('Most Frequent Symptoms:', 15, yPos);
+      doc.setFont('helvetica', 'normal');
+      yPos += 7;
+
+      const symptomCounts = recentSymptoms.reduce((acc, s) => {
+        acc[s.name] = (acc[s.name] || 0) + 1;
+        return acc;
+      }, {} as Record<string, number>);
+
+      Object.entries(symptomCounts)
+        .sort(([,a], [,b]) => b - a)
+        .slice(0, 5)
+        .forEach(([name, count]) => {
+          const avg = recentSymptoms
+            .filter(s => s.name === name)
+            .reduce((sum, s) => sum + s.severity, 0) / count;
+          doc.text(`• ${name}: ${count} times (avg severity: ${avg.toFixed(1)}/10)`, 20, yPos);
+          yPos += 6;
+        });
+
+      // Questions for clinician
+      yPos += 5;
+      doc.setFont('helvetica', 'bold');
+      doc.text('Suggested Discussion Points:', 15, yPos);
+      doc.setFont('helvetica', 'normal');
+      yPos += 7;
+      doc.text('1. Are the detected patterns clinically significant?', 20, yPos);
+      yPos += 6;
+      doc.text('2. Should we adjust treatment based on severity trends?', 20, yPos);
+      yPos += 6;
+      doc.text('3. Are there additional tests indicated by these patterns?', 20, yPos);
+
+      // Footer
+      doc.setFontSize(8);
+      doc.setTextColor(128, 128, 128);
+      doc.text('Generated by myHealthyAgent - Track symptoms, discover patterns', 105, 285, { align: 'center' });
+      doc.text('This report is for informational purposes. Discuss with your healthcare provider.', 105, 290, { align: 'center' });
+
+      doc.save(`visit-summary-${format(new Date(), 'yyyy-MM-dd')}.pdf`);
+      toast.success('Visit summary generated!');
     } catch (error) {
-      toast.error('Failed to generate PDF');
-      console.error(error);
+      console.error('Error generating visit summary:', error);
+      toast.error('Failed to generate visit summary');
+    } finally {
+      setGenerating(false);
     }
-    setGenerating(false);
   };
 
-  const exportJSON = async () => {
+  const generateFullReport = async () => {
+    setGenerating(true);
     try {
-      const json = await db.exportJSON();
-      const blob = new Blob([json], { type: 'application/json' });
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement('a');
-      a.href = url;
-      a.download = `symptoms-${format(new Date(), 'yyyy-MM-dd')}.json`;
-      a.click();
-      URL.revokeObjectURL(url);
-      toast.success('Data exported as JSON');
-    } catch (error) {
-      toast.error('Export failed');
-      console.error(error);
-    }
-  };
-
-  const exportCSV = async () => {
-    try {
-      const csv = await db.exportCSV();
-      const blob = new Blob([csv], { type: 'text/csv' });
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement('a');
-      a.href = url;
-      a.download = `symptoms-${format(new Date(), 'yyyy-MM-dd')}.csv`;
-      a.click();
-      URL.revokeObjectURL(url);
-      toast.success('Data exported as CSV');
-    } catch (error) {
-      toast.error('Export failed');
-      console.error(error);
-    }
-  };
-
-  return (
-    <div className="space-y-3">
-      <Button 
-        onClick={generatePDF}
-        disabled={generating}
-        className="w-full"
-        size="lg"
-      >
-        <FileText className="mr-2 h-4 w-4" />
-        Generate PDF Report
-      </Button>
+      const jsPDF = (await import('jspdf')).default;
+      const doc = new jsPDF();
       
-      <div className="grid grid-cols-2 gap-2">
-        <Button 
-          onClick={exportJSON}
-          variant="outline"
-          size="sm"
-        >
-          <Download className="mr-2 h-3 w-3" />
-          Export JSON
-        </Button>
-        
-        <Button 
-          onClick={exportCSV}
-          variant="outline"
-          size="sm"
-        >
-          <Download className="mr-2 h-3 w-3" />
-          Export CSV
-        </Button>
-      </div>
-    </div>
-  );
+      // Get all data
+      const symptoms = await db.getAllSymptoms();
+      const medications = await db.getAllMedicationSchedules();
+      const patterns = await detectPatterns(symptoms, { lookbackDays: 90 });
+
+      // Page 1: Cover page
+      doc.setFillColor(6, 182, 212); // Cyan-600
+      doc.rect(0, 0, 210, 40, 'F');
+      doc.setTextColor(255, 255, 255);
+      doc.setFontSize(24);
+      doc.setFont('helvetica', 'bold');
+      doc.text('myHealthyAgent', 105, 20, { align: 'center' });
+      doc.setFontSize(16);
+      doc.text('Comprehensive Health Report', 105, 30, { align: 'center' });
+
+      // Report info
+      doc.setTextColor(0, 0, 0);
+      doc.setFontSize(12);
+      doc.text(`Generated: ${format(new Date(), 'MMMM d, yyyy')}`, 105, 55, { align: 'center' });
+      doc.text(`Total Tracking Days: ${Math.ceil((new Date().getTime() - new Date(symptoms[0]?.timestamp || new Date()).getTime()) / (1000 * 60 * 60 * 24))}`, 105, 62, { align: 'center' });
+      doc.text(`Total Entries: ${symptoms.length}`, 105, 69, { align: 'center' });
+
+      // Summary statistics
+      doc.setFontSize(14);
+      doc.setFont('helvetica', 'bold');
+      doc.text('Summary Statistics', 15, 90);
+      doc.setFont('helvetica', 'normal');
+      doc.setFontSize(10);
+
+      const avgSeverity = symptoms.reduce((sum, s) => sum + s.severity, 0) / symptoms.length;
+      const maxSeverity = Math.max(...symptoms.map(s => s.severity));
+      const minSeverity = Math.min(...symptoms.map(s => s.severity));
+
+      doc.text(`Average Severity: ${avgSeverity.toFixed(1)}/10`, 20, 100);
+      doc.text(`Severity Range: ${minSeverity}-${maxSeverity}/10`, 20, 107);
+      doc.text(`Active Medications: ${medications.filter(m => m.isActive).length}`, 20, 114);
+      doc.text(`Patterns Detected: ${patterns.length}`, 20, 121);
+
+      // Page 2: Patterns
+      doc.addPage();
+      doc.setFontSize(16);
+      doc.setFont('helvetica', 'bold');
+      doc.text('Detected Patterns', 15, 20);
+      doc.setFont('helvetica', 'normal');
+      doc.setFontSize(10);
+
+      let yPos = 35;
+      if (patterns.length > 0) {
+        patterns.forEach((pattern, idx) => {
+          if (yPos > 250) {
+            doc.addPage();
+            yPos = 20;
+          }
+          doc.setFont('helvetica', 'bold');
+          doc.text(`Pattern ${idx + 1}: ${pattern.type.toUpperCase()}`, 15, yPos);
+          doc.setFont('helvetica', 'normal');
+          yPos += 7;
+          doc.text(pattern.text, 20, yPos);
+          yPos += 7;
+          doc.text(`Confidence: ${pattern.confidence}`, 20, yPos);
+          yPos += 10;
+        });
+      } else {
+        doc.text('No patterns detected yet. Continue tracking for at least 14 days.', 20, yPos);
+      }
+
+      // Page 3: Symptom History
+      doc.addPage();
+      doc.setFontSize(16);
+      doc.setFont('helvetica', 'bold');
+      doc.text('Symptom History (Last 50 Entries)', 15, 20);
+      doc.setFont('helvetica', 'normal');
+      doc.setFontSize(9);
+
+      yPos = 35;
+      symptoms
+        .sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime())
+        .slice(0, 50)
+        .forEach(symptom => {
+          if (yPos > 270) {
+            doc.addPage();
+            yPos = 20;
+          }
+          const date = format(new Date(symptom.timestamp), 'MM/dd/yy HH:mm');
+          const duration = symptom.duration_minutes ? ` (${symptom.duration_minutes}min)` : '';
+          doc.text(`${date}: ${symptom.name} - ${symptom.severity}/10${duration}`, 15, yPos);
+          if (symptom.tags && symptom.tags.length > 0) {
+            doc.setFontSize(8);
+            doc.text(`   Tags: ${symptom.tags.join(', ')}`, 15, yPos + 4);
+            yPos += 4;
+          }
+          yPos += 7;
+        });
+
+      // Footer on last page
+      doc.setFontSize(8);
+      doc.setTextColor(128, 128, 128);
+      doc.text('Generated by myHealthyAgent - Your personal health pattern discovery tool', 105, 285, { align: 'center' });
+      doc.text('This report is for informational purposes only. Always consult your healthcare provider.', 105, 290, { align: 'center' });
+
+      doc.save(`full-report-${format(new Date(), 'yyyy-MM-dd')}.pdf`);
+      toast.success('Full report generated!');
+    } catch (error) {
+      console.error('Error generating full report:', error);
+      toast.error('Failed to generate full report');
+    } finally {
+      setGenerating(false);
+    }
+  };
+
+  return {
+    generateVisitSummary,
+    generateFullReport,
+    generating
+  };
 }

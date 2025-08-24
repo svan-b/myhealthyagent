@@ -1,0 +1,50 @@
+/* app/styles/safe-padding.css */
+/* 
+ * Safe padding utilities for iOS safe areas and bottom action bars
+ * Prevents content from being hidden under fixed bottom elements
+ */
+
+/* Standard safe padding for content under bottom bars */
+.pb-safe {
+  padding-bottom: 80px;
+  padding-bottom: calc(env(safe-area-inset-bottom, 0px) + 80px);
+}
+
+/* Smaller safe padding for compact layouts */
+.pb-safe-sm {
+  padding-bottom: 60px;
+  padding-bottom: calc(env(safe-area-inset-bottom, 0px) + 60px);
+}
+
+/* Extra padding for scrollable containers */
+.scrollable-container {
+  padding-bottom: 100px;
+  padding-bottom: calc(env(safe-area-inset-bottom, 0px) + 100px);
+}
+
+/* Ensure smooth scrolling on iOS */
+.safe-scroll {
+  -webkit-overflow-scrolling: touch;
+  overflow-y: auto;
+}
+
+/* Bottom action bar positioning */
+.bottom-action-bar {
+  position: fixed;
+  bottom: 0;
+  left: 0;
+  right: 0;
+  background: white;
+  border-top: 1px solid #e5e7eb;
+  padding: 12px 16px;
+  padding-bottom: calc(env(safe-area-inset-bottom, 0px) + 12px);
+  z-index: 40;
+}
+
+/* Dark mode support */
+@media (prefers-color-scheme: dark) {
+  .bottom-action-bar {
+    background: #1f2937;
+    border-top-color: #374151;
+  }
+}

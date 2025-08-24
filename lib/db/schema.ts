@@ -3,6 +3,7 @@ export interface Symptom {
   id: string;
   name: string;
   severity: number;
+  duration_minutes?: number;
   timestamp: string;  // Changed from Date to string
   notes?: string;
   tags?: string[];

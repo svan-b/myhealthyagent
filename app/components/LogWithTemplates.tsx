@@ -1,7 +1,7 @@
 'use client';
 
-import { useState, useRef } from 'react';
-import QuickLogOriginal from './QuickLog-Simple';
+import { useState } from 'react';
+import { QuickLogFlow } from './mobile/QuickLogFlow';
 import { Button } from '@/components/ui/button';
 import { Card } from '@/components/ui/card';
 import { Brain, Bug, Moon, Zap, Coffee, Heart } from 'lucide-react';
@@ -15,7 +15,7 @@ type Template = {
 
 export function LogWithTemplates() {
   const [showTemplates, setShowTemplates] = useState(false);
-  const [templateData, setTemplateData] = useState<{symptoms: string[], severity: number} | null>(null);
+  const [, setTemplateData] = useState<{symptoms: string[], severity: number} | null>(null);
 
   const templates: Template[] = [
     { name: 'Migraine', icon: <Brain className="h-4 w-4" />, symptoms: ['Headache', 'Light sensitivity', 'Nausea'], severity: 7 },
@@ -28,7 +28,7 @@ export function LogWithTemplates() {
 
   return (
     <div className="space-y-4">
-      <QuickLogOriginal templateData={templateData} onTemplateUsed={() => setTemplateData(null)} />
+      <QuickLogFlow />
       
       <Button onClick={() => setShowTemplates(!showTemplates)} variant="outline" className="w-full">
         Use Template
@@ -36,7 +36,7 @@ export function LogWithTemplates() {
 
       {showTemplates && (
         <Card className="p-4">
-          <h3 className="font-semibold text-sm mb-3">Quick Templates</h3>
+          <h3 className="font-semibold text-sm mb-3 text-slate-900 dark:text-slate-100">Quick Templates</h3>
           <div className="grid grid-cols-2 gap-2">
             {templates.map((template) => (
               <Card
@@ -50,8 +50,8 @@ export function LogWithTemplates() {
                 <div className="flex items-center space-x-2">
                   <div className="p-1.5 bg-blue-100 rounded">{template.icon}</div>
                   <div>
-                    <p className="font-medium text-sm">{template.name}</p>
-                    <p className="text-xs text-gray-500">{template.symptoms.length} symptoms</p>
+                    <p className="font-medium text-sm text-slate-900 dark:text-slate-100">{template.name}</p>
+                    <p className="text-xs text-slate-600 dark:text-slate-400">{template.symptoms.length} symptoms</p>
                   </div>
                 </div>
               </Card>

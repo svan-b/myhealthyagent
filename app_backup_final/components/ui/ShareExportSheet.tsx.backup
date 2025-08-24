@@ -1,0 +1,250 @@
+import * as React from "react";
+import { createPortal } from "react-dom";
+
+type Props = {
+  open: boolean;
+  onClose: () => void;
+  onVisitReport: () => void;
+  onPdfReport: () => void;
+  onJsonExport: () => void;
+  onCsvExport: () => void;
+  onDeleteAll?: () => void;
+};
+
+export default function ShareExportSheet({
+  open, onClose, onVisitReport, onPdfReport, onJsonExport, onCsvExport, onDeleteAll,
+}: Props) {
+  const [isGenerating, setIsGenerating] = React.useState<string | null>(null);
+  const [mounted, setMounted] = React.useState(false);
+
+  React.useEffect(() => {
+    setMounted(true);
+    return () => setMounted(false);
+  }, []);
+
+  React.useEffect(() => {
+    if (open) {
+      // Prevent body scroll when modal is open
+      document.body.style.overflow = 'hidden';
+      
+      // Handle escape key
+      const handleEscape = (e: KeyboardEvent) => {
+        if (e.key === 'Escape') {
+          onClose();
+        }
+      };
+      document.addEventListener('keydown', handleEscape);
+      
+      return () => {
+        document.body.style.overflow = '';
+        document.removeEventListener('keydown', handleEscape);
+      };
+    }
+  }, [open, onClose]);
+
+  const handleVisitReport = async () => {
+    setIsGenerating('visit');
+    try {
+      await onVisitReport();
+      setIsGenerating(null);
+      onClose();
+    } catch (error) {
+      setIsGenerating(null);
+      console.error('Visit report failed:', error);
+    }
+  };
+
+  const handlePdfReport = async () => {
+    setIsGenerating('pdf');
+    try {
+      await onPdfReport();
+      setIsGenerating(null);
+      onClose();
+    } catch (error) {
+      setIsGenerating(null);
+      console.error('PDF report failed:', error);
+    }
+  };
+
+  const handleJsonExport = async () => {
+    setIsGenerating('json');
+    try {
+      await onJsonExport();
+      setIsGenerating(null);
+      onClose();
+    } catch (error) {
+      setIsGenerating(null);
+      console.error('JSON export failed:', error);
+    }
+  };
+
+  const handleCsvExport = async () => {
+    setIsGenerating('csv');
+    try {
+      await onCsvExport();
+      setIsGenerating(null);
+      onClose();
+    } catch (error) {
+      setIsGenerating(null);
+      console.error('CSV export failed:', error);
+    }
+  };
+
+  if (!mounted || !open) return null;
+  
+  const modalContent = (
+    <div className="fixed inset-0" style={{ zIndex: 99999 }}>
+      {/* Backdrop */}
+      <div 
+        className="absolute inset-0 bg-black/40 animate-in fade-in duration-200" 
+        onClick={onClose} 
+        aria-hidden="true"
+      />
+      
+      {/* Sheet Content */}
+      <div
+        className="absolute inset-x-0 bottom-0 mx-auto max-w-screen-sm rounded-t-2xl bg-white dark:bg-gray-900 p-4
+                   shadow-xl animate-in slide-in-from-bottom duration-200"
+        style={{ 
+          paddingBottom: 'calc(1rem + env(safe-area-inset-bottom))',
+          maxHeight: '90vh',
+          overflowY: 'auto'
+        }}
+        role="dialog" 
+        aria-modal="true" 
+        aria-label="Share & Export"
+      >
+        {/* Handle bar */}
+        <div className="mx-auto h-1.5 w-12 rounded-full bg-gray-300 dark:bg-gray-700 mb-4" />
+        
+        <h3 className="text-lg font-semibold mb-1 dark:text-white">Share & Export</h3>
+        
+        {/* Clinical Reports Section */}
+        <div className="mt-4">
+          <h4 className="text-sm font-semibold text-gray-700 dark:text-gray-300">Clinical Reports</h4>
+          <p className="text-sm text-gray-500 dark:text-gray-400 mb-2">Perfect for doctor visits</p>
+          <div className="grid grid-cols-1 gap-3 mb-4">
+            <button 
+              className={`rounded-xl border px-4 py-4 text-sm font-medium transition-all ${
+                isGenerating === 'visit' 
+                  ? 'border-blue-300 bg-blue-50 dark:bg-blue-900/30 text-blue-700 dark:text-blue-300' 
+                  : 'border-gray-300 dark:border-gray-700 hover:bg-gray-50 dark:hover:bg-gray-800 active:scale-95'
+              }`}
+              onClick={handleVisitReport}
+              disabled={isGenerating !== null}
+            >
+              {isGenerating === 'visit' ? (
+                <div className="flex items-center justify-center gap-2">
+                  <div className="w-4 h-4 border-2 border-blue-600 dark:border-blue-400 border-t-transparent rounded-full animate-spin"></div>
+                  Generating Visit Summary...
+                </div>
+              ) : (
+                <div className="text-left">
+                  <div className="font-semibold">📋 Visit Summary PDF</div>
+                  <div className="text-xs text-gray-500 dark:text-gray-400 mt-1">Last 30 days overview for your doctor</div>
+                </div>
+              )}
+            </button>
+            <button 
+              className={`rounded-xl border px-4 py-4 text-sm font-medium transition-all ${
+                isGenerating === 'pdf' 
+                  ? 'border-blue-300 bg-blue-50 dark:bg-blue-900/30 text-blue-700 dark:text-blue-300' 
+                  : 'border-gray-300 dark:border-gray-700 hover:bg-gray-50 dark:hover:bg-gray-800 active:scale-95'
+              }`}
+              onClick={handlePdfReport}
+              disabled={isGenerating !== null}
+            >
+              {isGenerating === 'pdf' ? (
+                <div className="flex items-center justify-center gap-2">
+                  <div className="w-4 h-4 border-2 border-blue-600 dark:border-blue-400 border-t-transparent rounded-full animate-spin"></div>
+                  Generating Full Report...
+                </div>
+              ) : (
+                <div className="text-left">
+                  <div className="font-semibold">📊 Full Report PDF</div>
+                  <div className="text-xs text-gray-500 dark:text-gray-400 mt-1">Complete analysis with charts</div>
+                </div>
+              )}
+            </button>
+          </div>
+        </div>
+
+        {/* Data Export Section */}
+        <div className="mt-4">
+          <h4 className="text-sm font-semibold text-gray-700 dark:text-gray-300">Data Export</h4>
+          <p className="text-sm text-gray-500 dark:text-gray-400 mb-2">Backup and share your data</p>
+          <div className="grid grid-cols-2 gap-3">
+            <button 
+              className={`rounded-xl border px-4 py-3 text-sm font-medium transition-all ${
+                isGenerating === 'json' 
+                  ? 'border-blue-300 bg-blue-50 dark:bg-blue-900/30 text-blue-700 dark:text-blue-300' 
+                  : 'border-gray-300 dark:border-gray-700 hover:bg-gray-50 dark:hover:bg-gray-800 active:scale-95'
+              }`}
+              onClick={handleJsonExport}
+              disabled={isGenerating !== null}
+            >
+              {isGenerating === 'json' ? (
+                <div className="flex items-center justify-center gap-2">
+                  <div className="w-3 h-3 border-2 border-blue-600 dark:border-blue-400 border-t-transparent rounded-full animate-spin"></div>
+                  JSON
+                </div>
+              ) : (
+                <>
+                  <div className="font-semibold">💾 JSON</div>
+                  <div className="text-xs text-gray-500 dark:text-gray-400">Complete backup</div>
+                </>
+              )}
+            </button>
+            <button 
+              className={`rounded-xl border px-4 py-3 text-sm font-medium transition-all ${
+                isGenerating === 'csv' 
+                  ? 'border-blue-300 bg-blue-50 dark:bg-blue-900/30 text-blue-700 dark:text-blue-300' 
+                  : 'border-gray-300 dark:border-gray-700 hover:bg-gray-50 dark:hover:bg-gray-800 active:scale-95'
+              }`}
+              onClick={handleCsvExport}
+              disabled={isGenerating !== null}
+            >
+              {isGenerating === 'csv' ? (
+                <div className="flex items-center justify-center gap-2">
+                  <div className="w-3 h-3 border-2 border-blue-600 dark:border-blue-400 border-t-transparent rounded-full animate-spin"></div>
+                  CSV
+                </div>
+              ) : (
+                <>
+                  <div className="font-semibold">📈 CSV</div>
+                  <div className="text-xs text-gray-500 dark:text-gray-400">For Excel/Sheets</div>
+                </>
+              )}
+            </button>
+          </div>
+        </div>
+
+        {/* Delete All Data Button */}
+        {onDeleteAll && (
+          <button
+            className="w-full mt-6 rounded-xl border border-red-300 dark:border-red-700 text-red-700 dark:text-red-400 px-4 py-3 text-sm font-medium hover:bg-red-50 dark:hover:bg-red-900/30 active:scale-95"
+            onClick={() => { 
+              if(confirm('Delete all data? This cannot be undone.')) {
+                onDeleteAll(); 
+                onClose();
+              }
+            }}
+          >
+            Delete All Data
+          </button>
+        )}
+
+        {/* Cancel Button */}
+        <button 
+          className="mt-4 w-full rounded-xl bg-gray-100 dark:bg-gray-800 py-3 font-medium hover:bg-gray-200 dark:hover:bg-gray-700 active:scale-95 dark:text-white" 
+          onClick={onClose}
+        >
+          Cancel
+        </button>
+      </div>
+    </div>
+  );
+
+  // Use portal to render at document body level
+  return createPortal(modalContent, document.body);
+}

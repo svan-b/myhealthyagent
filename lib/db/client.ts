@@ -226,4 +226,17 @@ export const db = {
     const idb = await initDB();
     return idb.getAll("adherence");
   },
+
+  // Delete all data
+  async deleteAllData(): Promise<void> {
+    const idb = await initDB();
+    const tx = idb.transaction(["symptoms", "meds", "schedules", "adherence", "preferences"], "readwrite");
+    await tx.objectStore("symptoms").clear();
+    await tx.objectStore("meds").clear();
+    await tx.objectStore("schedules").clear();
+    await tx.objectStore("adherence").clear();
+    // Note: We might want to keep preferences, so commenting out for now
+    // await tx.objectStore("preferences").clear();
+    await tx.done;
+  },
 };
