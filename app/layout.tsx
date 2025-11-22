@@ -1,5 +1,6 @@
 import type { Metadata } from 'next';
-import { Inter } from 'next/font/google';
+// Temporarily using system fonts for offline build compatibility
+// import { Inter } from 'next/font/google';
 import './globals.css';
 import { Providers } from './providers';
 import { Toaster } from 'sonner';
@@ -8,7 +9,7 @@ import { OfflineIndicator } from './components/OfflineIndicator';
 import './styles/mobile.css';
 import './styles/safe-padding.css';
 
-const inter = Inter({ subsets: ['latin'] });
+// const inter = Inter({ subsets: ['latin'] });
 
 export const metadata: Metadata = {
   title: 'myHealthyAgent',
@@ -28,7 +29,7 @@ export default function RootLayout({
 }) {
   return (
     <html lang="en" suppressHydrationWarning>
-      <body className={inter.className}>
+      <body className="font-sans">
         <Providers>
           <ServiceWorkerProvider />
           <OfflineIndicator />

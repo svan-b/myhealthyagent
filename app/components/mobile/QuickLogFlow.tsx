@@ -19,28 +19,75 @@ const CONTEXT_OPTIONS = [
   'Exercise', 'Work', 'Weekend', 'Menstrual'
 ];
 
+type SymptomRating = {
+  symptom: string;
+  severity: 'low' | 'medium' | 'high' | 'severe';
+  duration: number;
+};
+
 export function QuickLogFlow() {
   const [screen, setScreen] = useState<'symptoms' | 'severity' | 'context'>('symptoms');
-  const [selectedSymptom, setSelectedSymptom] = useState<string>('');
-  const [severity, setSeverity] = useState<'low' | 'medium' | 'high' | 'severe'>('medium');
-  const [duration, setDuration] = useState<number>(30); // default 30 minutes
+  const [selectedSymptoms, setSelectedSymptoms] = useState<string[]>([]);
+  const [symptomRatings, setSymptomRatings] = useState<Record<string, SymptomRating>>({});
+  const [currentSymptomIndex, setCurrentSymptomIndex] = useState(0);
   const [selectedContext, setSelectedContext] = useState<string[]>([]);
   const [customSymptom, setCustomSymptom] = useState('');
   const [saving, setSaving] = useState(false);
   const [startTime] = useState(Date.now());
 
-  const selectSymptom = React.useCallback((symptom: string) => {
-    setSelectedSymptom(symptom);
-    // Auto-advance to severity screen for better UX
-    setTimeout(() => setScreen('severity'), 300);
+  // Local state for severity screen (must be at top level)
+  const [localSeverity, setLocalSeverity] = useState<'low' | 'medium' | 'high' | 'severe'>('medium');
+  const [localDuration, setLocalDuration] = useState<number>(30);
+
+  const toggleSymptom = React.useCallback((symptom: string) => {
+    setSelectedSymptoms(prev =>
+      prev.includes(symptom)
+        ? prev.filter(s => s !== symptom)
+        : [...prev, symptom]
+    );
   }, []);
 
   const addCustomSymptom = () => {
     if (customSymptom.trim()) {
-      setSelectedSymptom(customSymptom.trim());
+      const symptom = customSymptom.trim();
+      setSelectedSymptoms(prev => [...prev, symptom]);
       setCustomSymptom('');
-      // Auto-advance to severity screen
-      setTimeout(() => setScreen('severity'), 300);
+    }
+  };
+
+  const startRating = () => {
+    if (selectedSymptoms.length === 0) {
+      toast.error('Please select at least one symptom');
+      return;
+    }
+    setCurrentSymptomIndex(0);
+    // Reset local severity/duration for first symptom
+    const firstSymptom = selectedSymptoms[0];
+    const firstRating = symptomRatings[firstSymptom] || { severity: 'medium', duration: 30 };
+    setLocalSeverity(firstRating.severity);
+    setLocalDuration(firstRating.duration);
+    setScreen('severity');
+  };
+
+  const saveCurrentSymptomRating = () => {
+    const currentSymptom = selectedSymptoms[currentSymptomIndex];
+    setSymptomRatings(prev => ({
+      ...prev,
+      [currentSymptom]: { symptom: currentSymptom, severity: localSeverity, duration: localDuration }
+    }));
+
+    // Move to next symptom or context screen
+    if (currentSymptomIndex < selectedSymptoms.length - 1) {
+      const nextIndex = currentSymptomIndex + 1;
+      setCurrentSymptomIndex(nextIndex);
+
+      // Load next symptom's rating or defaults
+      const nextSymptom = selectedSymptoms[nextIndex];
+      const nextRating = symptomRatings[nextSymptom] || { severity: 'medium', duration: 30 };
+      setLocalSeverity(nextRating.severity);
+      setLocalDuration(nextRating.duration);
+    } else {
+      setScreen('context');
     }
   };
 
@@ -55,38 +102,42 @@ export function QuickLogFlow() {
   const handleSave = async () => {
     setSaving(true);
     const timestamp = new Date().toISOString();
-    
+
     // Convert severity to number (1-10)
     const severityMap = { low: 2, medium: 5, high: 7, severe: 9 };
-    const severityNum = severityMap[severity];
 
     try {
-      // Save the single symptom
-      await db.addSymptom({
-        id: uuidv4(),
-        name: selectedSymptom,
-        severity: severityNum,
-        timestamp,
-        duration_minutes: duration,
-        tags: selectedContext
-      });
+      // Save all symptoms with their individual ratings
+      for (const symptom of selectedSymptoms) {
+        const rating = symptomRatings[symptom] || { severity: 'medium', duration: 30 };
+        const severityNum = severityMap[rating.severity];
+
+        await db.addSymptom({
+          id: uuidv4(),
+          name: symptom,
+          severity: severityNum,
+          timestamp,
+          duration_minutes: rating.duration,
+          tags: selectedContext
+        });
+      }
 
       // Update streak
       await db.updateStreak();
 
-      ((Date.now() - startTime) / 1000).toFixed(1);
-      toast.success(`${selectedSymptom} logged successfully`, {
-        description: `Severity: ${severity}, Context: ${selectedContext.join(', ') || 'None'}`
+      const timeElapsed = ((Date.now() - startTime) / 1000).toFixed(1);
+      toast.success(`${selectedSymptoms.length} symptom(s) logged in ${timeElapsed}s`, {
+        description: `Context: ${selectedContext.join(', ') || 'None'}`
       });
 
       // Reset
-      setSelectedSymptom('');
-      setSeverity('medium');
-      setDuration(30);
+      setSelectedSymptoms([]);
+      setSymptomRatings({});
+      setCurrentSymptomIndex(0);
       setSelectedContext([]);
       setScreen('symptoms');
     } catch (error) {
-      toast.error('Failed to save symptom');
+      toast.error('Failed to save symptoms');
       console.error(error);
     } finally {
       setSaving(false);
@@ -103,30 +154,35 @@ export function QuickLogFlow() {
             <h1 className="text-xl font-semibold text-gray-900 dark:text-white text-center">
               Track Your Health
             </h1>
-            <p className="text-sm text-gray-600 text-center mt-1">
-              Choose one symptom to log right now
+            <p className="text-sm text-gray-600 dark:text-gray-400 text-center mt-1">
+              Select symptoms you&apos;re experiencing right now
             </p>
-            <div className="mt-3 px-3 py-2 bg-slate-100 rounded-lg max-w-md mx-auto">
-              <p className="text-xs text-slate-600 text-center">
-                Track one symptom at a time for accurate pattern detection
-              </p>
-            </div>
+            {selectedSymptoms.length > 0 && (
+              <div className="mt-3 px-3 py-2 bg-blue-50 dark:bg-blue-900/20 rounded-lg max-w-md mx-auto">
+                <p className="text-xs text-blue-900 dark:text-blue-300 text-center font-medium">
+                  {selectedSymptoms.length} symptom{selectedSymptoms.length > 1 ? 's' : ''} selected
+                </p>
+              </div>
+            )}
           </div>
 
           {/* Symptoms List */}
-          <div className="px-4 py-6">
+          <div className="px-4 py-6 pb-24">
             <div className="grid grid-cols-1 md:grid-cols-2 gap-3 mb-8">
               {COMMON_SYMPTOMS.map(symptom => (
                 <button
                   key={symptom}
-                  onClick={() => selectSymptom(symptom)}
-                  className={`w-full h-12 px-4 text-left rounded-lg font-medium transition-all focus:outline-none focus:ring-2 focus:ring-cyan-500 focus:ring-offset-1
-                    ${selectedSymptom === symptom
+                  onClick={() => toggleSymptom(symptom)}
+                  className={`w-full h-12 px-4 flex items-center justify-between rounded-lg font-medium transition-all focus:outline-none focus:ring-2 focus:ring-cyan-500 focus:ring-offset-1
+                    ${selectedSymptoms.includes(symptom)
                       ? 'bg-cyan-600 text-white border-2 border-cyan-700'
-                      : 'bg-white border border-slate-300 text-gray-900 hover:bg-slate-50 hover:border-cyan-400'
+                      : 'bg-white dark:bg-gray-800 border border-slate-300 dark:border-gray-600 text-gray-900 dark:text-white hover:bg-slate-50 dark:hover:bg-gray-700 hover:border-cyan-400'
                     }`}
                 >
-                  {symptom}
+                  <span>{symptom}</span>
+                  {selectedSymptoms.includes(symptom) && (
+                    <Check className="w-5 h-5" />
+                  )}
                 </button>
               ))}
             </div>
@@ -143,17 +199,30 @@ export function QuickLogFlow() {
                   onChange={(e) => setCustomSymptom(e.target.value)}
                   onKeyPress={(e) => e.key === 'Enter' && addCustomSymptom()}
                   placeholder="Enter symptom name..."
-                  className="flex-1 h-12 px-4 bg-white dark:bg-gray-800 border border-gray-300 dark:border-gray-600 
+                  className="flex-1 h-12 px-4 bg-white dark:bg-gray-800 border border-gray-300 dark:border-gray-600
                            rounded-lg text-gray-900 dark:text-white placeholder-gray-500 dark:placeholder-gray-400
                            focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
                 />
-                <Button 
+                <Button
                   onClick={addCustomSymptom}
                   disabled={!customSymptom.trim()}
-                  className="h-12 px-6 bg-blue-900 hover:bg-blue-800 text-white rounded-lg 
+                  className="h-12 px-6 bg-blue-900 hover:bg-blue-800 text-white rounded-lg
                            disabled:opacity-50 disabled:cursor-not-allowed"
                 >
                   Add
+                </Button>
+              </div>
+            </div>
+
+            {/* Next Button - Fixed at bottom */}
+            <div className="fixed bottom-0 left-0 right-0 p-4 bg-white dark:bg-gray-900 border-t border-gray-100 dark:border-gray-800 z-10">
+              <div className="max-w-2xl mx-auto">
+                <Button
+                  onClick={startRating}
+                  disabled={selectedSymptoms.length === 0}
+                  className="w-full h-14 bg-blue-900 hover:bg-blue-800 text-white disabled:opacity-50 disabled:cursor-not-allowed text-base font-medium"
+                >
+                  Rate {selectedSymptoms.length > 0 ? `${selectedSymptoms.length} Symptom${selectedSymptoms.length > 1 ? 's' : ''}` : 'Symptoms'}
                 </Button>
               </div>
             </div>
@@ -163,16 +232,21 @@ export function QuickLogFlow() {
     );
   }
 
-  // Screen 2: Severity
+  // Screen 2: Severity (per symptom)
   if (screen === 'severity') {
+    const currentSymptom = selectedSymptoms[currentSymptomIndex];
+
     return (
       <div className="min-h-[600px] bg-white dark:bg-gray-900">
         <div className="max-w-2xl mx-auto">
           {/* Header with back button */}
           <div className="px-4 pt-6 pb-4 border-b border-gray-100 dark:border-gray-800">
-            <div className="flex items-center">
-              <button 
-                onClick={() => setScreen('symptoms')}
+            <div className="flex items-center justify-between">
+              <button
+                onClick={() => {
+                  setCurrentSymptomIndex(0);
+                  setScreen('symptoms');
+                }}
                 className="flex items-center text-gray-600 dark:text-gray-400 hover:text-blue-600 dark:hover:text-blue-400 transition-colors"
               >
                 <svg className="w-5 h-5 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -180,10 +254,13 @@ export function QuickLogFlow() {
                 </svg>
                 Back
               </button>
+              <div className="text-sm text-gray-500 dark:text-gray-400">
+                {currentSymptomIndex + 1} of {selectedSymptoms.length}
+              </div>
             </div>
             <div className="text-center mt-4">
               <h1 className="text-xl font-semibold text-gray-900 dark:text-white">
-                Rate Your {selectedSymptom}
+                Rate Your {currentSymptom}
               </h1>
               <p className="text-sm text-gray-500 dark:text-gray-400 mt-1">
                 How intense is it right now?
@@ -198,11 +275,11 @@ export function QuickLogFlow() {
 
           {/* Severity Picker */}
           <div className="px-4 py-8">
-            <SeverityPicker value={severity} onChange={setSeverity} />
+            <SeverityPicker value={localSeverity} onChange={setLocalSeverity} />
           </div>
 
           {/* Duration Picker */}
-          <div className="px-4 mt-8">
+          <div className="px-4 mt-8 pb-24">
             <h3 className="text-lg font-semibold text-gray-900 dark:text-white mb-1">
               How long did it last?
             </h3>
@@ -221,9 +298,9 @@ export function QuickLogFlow() {
                 <button
                   key={value}
                   type="button"
-                  onClick={() => setDuration(value)}
+                  onClick={() => setLocalDuration(value)}
                   className={`py-3 px-3 rounded-lg font-medium text-sm transition-all ${
-                    duration === value
+                    localDuration === value
                       ? 'bg-blue-900 text-white shadow-sm'
                       : 'bg-gray-100 dark:bg-gray-800 text-gray-700 dark:text-gray-300 hover:bg-gray-200 dark:hover:bg-gray-700'
                   }`}
@@ -234,27 +311,16 @@ export function QuickLogFlow() {
             </div>
           </div>
 
-          {/* Bottom Actions */}
-          <div className="p-4 mt-8 bg-white dark:bg-gray-900 border-t border-gray-100 dark:border-gray-800">
-            <div className="mb-2 text-center">
-              <p className="text-xs text-gray-500 dark:text-gray-400">
-                Next: Add timing details (optional) or save now
-              </p>
-            </div>
-            <div className="flex gap-3 max-w-lg mx-auto">
+          {/* Bottom Actions - Fixed */}
+          <div className="fixed bottom-0 left-0 right-0 p-4 bg-white dark:bg-gray-900 border-t border-gray-100 dark:border-gray-800 z-10">
+            <div className="max-w-2xl mx-auto">
               <Button
-                variant="outline"
-                onClick={handleSave}
-                className="flex-1 h-12 border-gray-300 dark:border-gray-600 text-gray-700 dark:text-gray-300
-                         hover:bg-gray-50 dark:hover:bg-gray-800"
+                onClick={saveCurrentSymptomRating}
+                className="w-full h-14 bg-blue-900 hover:bg-blue-800 text-white text-base font-medium"
               >
-                Save {selectedSymptom}
-              </Button>
-              <Button
-                onClick={() => setScreen('context')}
-                className="flex-1 h-12 bg-blue-900 hover:bg-blue-800 text-white"
-              >
-                Add Context
+                {currentSymptomIndex < selectedSymptoms.length - 1
+                  ? `Next: ${selectedSymptoms[currentSymptomIndex + 1]}`
+                  : 'Continue to Context'}
               </Button>
             </div>
           </div>
@@ -283,10 +349,10 @@ export function QuickLogFlow() {
             </div>
             <div className="text-center mt-4">
               <h1 className="text-xl font-semibold text-gray-900 dark:text-white">
-                When Did This Happen?
+                Add Context (Optional)
               </h1>
               <p className="text-sm text-gray-500 dark:text-gray-400 mt-1">
-                Help us find patterns in your <span className="font-medium text-blue-600 dark:text-blue-400">{selectedSymptom}</span>
+                When did {selectedSymptoms.length > 1 ? 'these symptoms' : 'this symptom'} happen?
               </p>
               <div className="mt-3 px-3 py-2 bg-blue-50 dark:bg-blue-900/20 rounded-lg max-w-md mx-auto">
                 <p className="text-xs text-blue-900 dark:text-blue-300 text-center">
@@ -297,7 +363,7 @@ export function QuickLogFlow() {
           </div>
 
           {/* Context Options */}
-          <div className="px-4 py-6">
+          <div className="px-4 py-6 pb-24">
             <div className="grid grid-cols-1 md:grid-cols-2 gap-3 mb-8">
               {CONTEXT_OPTIONS.map(context => (
                 <button
@@ -331,14 +397,14 @@ export function QuickLogFlow() {
             )}
           </div>
 
-          {/* Bottom Actions */}
-          <div className="p-4 bg-white dark:bg-gray-900 border-t border-gray-100 dark:border-gray-800">
-            <div className="mb-3 text-center">
-              <p className="text-xs text-gray-500 dark:text-gray-400">
-                Ready to save your {selectedSymptom} with {selectedContext.length > 0 ? `${selectedContext.length} context detail${selectedContext.length > 1 ? 's' : ''}` : 'no context'} 
-              </p>
-            </div>
-            <div className="max-w-lg mx-auto">
+          {/* Bottom Actions - Fixed */}
+          <div className="fixed bottom-0 left-0 right-0 p-4 bg-white dark:bg-gray-900 border-t border-gray-100 dark:border-gray-800 z-10">
+            <div className="max-w-2xl mx-auto">
+              <div className="mb-2 text-center">
+                <p className="text-xs text-gray-500 dark:text-gray-400">
+                  Ready to save {selectedSymptoms.length} symptom{selectedSymptoms.length > 1 ? 's' : ''} {selectedContext.length > 0 ? `with ${selectedContext.length} context detail${selectedContext.length > 1 ? 's' : ''}` : ''}
+                </p>
+              </div>
               <Button
                 onClick={handleSave}
                 disabled={saving}
@@ -350,11 +416,11 @@ export function QuickLogFlow() {
                       <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
                       <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
                     </svg>
-                    Saving your health data...
+                    Saving...
                   </>
                 ) : (
                   <>
-                    Complete & Save {selectedSymptom}
+                    Save All Symptoms
                   </>
                 )}
               </Button>

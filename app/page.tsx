@@ -73,60 +73,126 @@ export default function HomePage() {
     try {
       const { default: jsPDF } = await import('jspdf');
       const { subDays } = await import('date-fns');
-      
+      const { detectPatterns } = await import('@/lib/report/insights');
+
       const now = new Date();
       const thirtyDaysAgo = subDays(now, 30);
-      
+
       // Fetch data
       const allSymptoms = await db.getAllSymptoms();
       const symptoms = allSymptoms.filter(s => new Date(s.timestamp) >= thirtyDaysAgo);
-      
+
+      // Detect patterns with confidence scores
+      const patterns = await detectPatterns(symptoms, { lookbackDays: 30, now });
+
       // Create PDF
       const doc = new jsPDF();
-      
+
       // Header
       doc.setFontSize(18);
       doc.setFont('helvetica', 'bold');
       doc.text('myHealthyAgent — Visit Report', 20, 20);
-      
+
       doc.setFontSize(10);
       doc.setFont('helvetica', 'normal');
       doc.text(`Generated: ${format(now, 'PPP')}`, 20, 30);
       doc.text(`Period: ${format(thirtyDaysAgo, 'MMM d')} – ${format(now, 'MMM d, yyyy')}`, 20, 35);
-      
+
       // Basic symptom summary
       let y = 50;
       doc.setFontSize(12);
       doc.setFont('helvetica', 'bold');
       doc.text('Symptom Summary', 20, y);
       y += 10;
-      
+
       doc.setFont('helvetica', 'normal');
+      doc.setFontSize(10);
       doc.text(`Total entries: ${symptoms.length}`, 20, y);
       y += 5;
-      
+
       if (symptoms.length > 0) {
         const avgSeverity = (symptoms.reduce((sum, s) => sum + s.severity, 0) / symptoms.length).toFixed(1);
         doc.text(`Average severity: ${avgSeverity}/10`, 20, y);
         y += 10;
-        
+
         // List recent symptoms
         const recentSymptoms = symptoms.slice(-10);
         doc.text('Recent entries:', 20, y);
         y += 5;
-        
+
         recentSymptoms.forEach(symptom => {
+          if (y > 270) { // Check page overflow
+            doc.addPage();
+            y = 20;
+          }
           const date = format(new Date(symptom.timestamp), 'MMM d');
-          doc.text(`${date}: ${symptom.name} (${symptom.severity}/10)`, 25, y);
+          const durationText = symptom.duration_minutes ? ` (${symptom.duration_minutes}min)` : '';
+          doc.text(`${date}: ${symptom.name} - ${symptom.severity}/10${durationText}`, 25, y);
           y += 4;
         });
       }
-      
+
+      // Pattern Analysis Section with Confidence Scores
+      y += 10;
+      if (y > 250) {
+        doc.addPage();
+        y = 20;
+      }
+
+      doc.setFontSize(12);
+      doc.setFont('helvetica', 'bold');
+      doc.text('Pattern Analysis (Statistical Confidence)', 20, y);
+      y += 8;
+
+      doc.setFontSize(10);
+      doc.setFont('helvetica', 'normal');
+
+      if (patterns && patterns.length > 0) {
+        patterns.forEach((pattern, idx) => {
+          if (y > 265) {
+            doc.addPage();
+            y = 20;
+          }
+
+          // Convert confidence to percentage
+          const confidenceMap = { 'High': 85, 'Medium': 65, 'Low': 45 };
+          const confidencePercent = confidenceMap[pattern.confidence];
+
+          doc.setFont('helvetica', 'bold');
+          doc.text(`${idx + 1}. ${pattern.text}`, 20, y);
+          y += 5;
+
+          doc.setFont('helvetica', 'normal');
+          doc.text(`   Confidence: ${confidencePercent}% (${pattern.confidence})`, 20, y);
+          y += 4;
+          doc.text(`   Type: ${pattern.type}`, 20, y);
+          y += 6;
+        });
+      } else {
+        doc.text('Insufficient data for pattern detection.', 20, y);
+        y += 5;
+        doc.text('Continue tracking for at least 14 days for comprehensive analysis.', 20, y);
+        y += 6;
+      }
+
+      // Footer disclaimer
+      y += 5;
+      if (y > 270) {
+        doc.addPage();
+        y = 20;
+      }
+      doc.setFontSize(8);
+      doc.setFont('helvetica', 'italic');
+      doc.text('Temporal patterns detected algorithmically. Discuss with clinician.', 20, y);
+      y += 4;
+      doc.text('This report is for informational purposes only and not a substitute for medical advice.', 20, y);
+
       // Save the PDF with timestamp
       doc.save(`visit-report-${format(new Date(), 'yyyy-MM-dd-HHmm')}.pdf`);
-      
-      toast.success('Visit report downloaded');
-    } catch {
+
+      toast.success('Visit report with pattern analysis downloaded');
+    } catch (error) {
+      console.error('PDF generation error:', error);
       toast.error('Failed to generate report');
     }
   };

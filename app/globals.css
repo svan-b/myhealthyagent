@@ -301,6 +301,11 @@ input:focus-visible {
   @apply bg-cyan-50;
 }
 
+/* Safe area padding for mobile devices - prevents bottom UI overlap */
+.pb-safe {
+  padding-bottom: calc(env(safe-area-inset-bottom) + 80px);
+}
+
 /* Remove all decorative elements */
 .emoji-icon,
 .decorative-graphic,
