@@ -50,6 +50,20 @@ export interface UserPreferences {
 
 export type Frequency = 'daily' | 'twice-daily' | 'three-times' | 'four-times' | 'as-needed';
 
+/** Times and frequency a schedule had before an edit. See lib/medication/doses.ts. */
+export interface ScheduleVersion {
+  frequency: Frequency;
+  scheduleTimes: string[];
+  /** When this version was replaced by the next one. */
+  until: string;
+}
+
+/** A pause that has ended. */
+export interface SchedulePause {
+  from: string;
+  to: string;
+}
+
 export interface MedicationSchedule {
   id: string;
   medicationName: string;
@@ -58,8 +72,15 @@ export interface MedicationSchedule {
   /** Local wall clock times, 24h "HH:mm". Empty for as-needed. */
   scheduleTimes: string[];
   isActive: boolean;
+  /** When tracking started. Unrecorded doses due before this never count as missed. */
   startDate: string;
   endDate?: string;
+  /** When the current pause started. Only set while paused. */
+  pausedAt?: string;
+  /** Earlier pauses, oldest first. Doses due during them never count as missed. */
+  pauses?: SchedulePause[];
+  /** Earlier times and frequency, oldest first, so past days are read against the times in effect then. */
+  timesHistory?: ScheduleVersion[];
   notes?: string;
   createdAt: string;
   updatedAt: string;

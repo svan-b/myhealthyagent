@@ -1,4 +1,5 @@
 // lib/db/client.ts
+import { normalizeTimes } from '@/lib/medication/doses';
 import { initDB, STORES } from './init';
 import {
   DEFAULT_PREFERENCES,
@@ -243,17 +244,17 @@ export const db = {
     return rows.sort((a, b) => a.medicationName.localeCompare(b.medicationName));
   },
 
+  /** Saves a schedule as given. Pause, resume and time changes are built in lib/medication/doses.ts. */
   async saveMedicationSchedule(schedule: MedicationSchedule): Promise<void> {
     const name = cleanName(schedule.medicationName);
     if (!name) throw new Error('Medication name is required');
-    const times = Array.from(new Set(schedule.scheduleTimes.filter(t => /^\d{2}:\d{2}$/.test(t)))).sort();
     const idb = await initDB();
     await idb.put('schedules', {
       ...schedule,
       medicationName: name,
       dosage: schedule.dosage.trim().slice(0, MAX_NAME_LENGTH),
       notes: cleanNote(schedule.notes),
-      scheduleTimes: schedule.frequency === 'as-needed' ? [] : times,
+      scheduleTimes: normalizeTimes(schedule.frequency, schedule.scheduleTimes),
     });
     notify();
   },
@@ -287,6 +288,13 @@ export const db = {
   async deleteDose(id: string): Promise<void> {
     const idb = await initDB();
     await idb.delete('adherence', id);
+    notify();
+  },
+
+  /** Puts back a dose record that was removed, for Undo. Unlike saveDose it does not count as logging today. */
+  async restoreDose(dose: MedicationAdherence): Promise<void> {
+    const idb = await initDB();
+    await idb.put('adherence', dose);
     notify();
   },
 

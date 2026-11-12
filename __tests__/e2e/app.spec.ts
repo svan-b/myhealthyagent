@@ -285,8 +285,21 @@ test('upgrades data saved by the previous version of the app', async ({ page }) 
       r.onsuccess = () => res(r.result);
       r.onerror = () => rej(r.error);
     });
-    const tx = db.transaction(['symptoms', 'meds', 'preferences'], 'readwrite');
+    const tx = db.transaction(['symptoms', 'meds', 'preferences', 'schedules'], 'readwrite');
     const yesterday = new Date(Date.now() - 86_400_000).toISOString();
+    // The previous release could add medications but had no way to record a dose
+    const added = new Date(Date.now() - 200 * 86_400_000).toISOString();
+    const oldSchedule = {
+      dosage: '10mg',
+      frequency: 'twice-daily',
+      scheduleTimes: ['08:00', '20:00'],
+      startDate: added,
+      notes: '',
+      createdAt: added,
+      updatedAt: added,
+    };
+    tx.objectStore('schedules').put({ ...oldSchedule, id: 'old-s1', medicationName: 'Lisinopril', isActive: true });
+    tx.objectStore('schedules').put({ ...oldSchedule, id: 'old-s2', medicationName: 'Metformin', isActive: false });
     tx.objectStore('symptoms').put({
       id: 'old-1',
       name: 'Migraine',
@@ -325,5 +338,12 @@ test('upgrades data saved by the previous version of the app', async ({ page }) 
   await expect(main.getByText('Ongoing · Evening · Stressed')).toBeVisible();
   await expect(main.getByText('Sumatriptan', { exact: true })).toBeVisible();
   await expect(main.getByText('Medication', { exact: true })).toBeVisible();
+
+  // Months with no way to record a dose are not shown as missed doses
+  await openTab(page, 'Meds');
+  await expect(main.getByRole('button', { name: 'Edit Lisinopril' })).toBeVisible();
+  await expect(main.getByText('Paused', { exact: true })).toBeVisible();
+  await expect(main.getByText(/taken in 30 days/)).toHaveCount(0);
+  await expect(main.getByText('Overdue')).toHaveCount(0);
   expect(errors).toEqual([]);
 });

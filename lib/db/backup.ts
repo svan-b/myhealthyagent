@@ -1,6 +1,7 @@
 // lib/db/backup.ts
 // Backup, restore and spreadsheet export. Everything happens on the device.
 import { z } from 'zod';
+import { startTrackingAt } from '@/lib/medication/doses';
 import { initDB } from './init';
 import { db, normalizePreferences } from './client';
 import type { Factor, MedicationAdherence, MedicationSchedule, Symptom } from './schema';
@@ -39,15 +40,27 @@ const legacyMedSchema = z.object({
   notes: z.string().optional().nullable(),
 });
 
+const frequencySchema = z.enum(['daily', 'twice-daily', 'three-times', 'four-times', 'as-needed']);
+
+// Every schedule field must be listed here. Unknown keys are dropped, so a restore would lose them.
 const scheduleSchema = z.object({
   id: z.string().min(1),
   medicationName: z.string().min(1).max(200),
   dosage: z.string().max(200),
-  frequency: z.enum(['daily', 'twice-daily', 'three-times', 'four-times', 'as-needed']),
+  frequency: frequencySchema,
   scheduleTimes: z.array(z.string()),
   isActive: z.boolean(),
   startDate: z.string(),
   endDate: z.string().optional().nullable(),
+  pausedAt: isoDate.optional().nullable(),
+  pauses: z
+    .array(z.object({ from: isoDate, to: isoDate }))
+    .optional()
+    .nullable(),
+  timesHistory: z
+    .array(z.object({ frequency: frequencySchema, scheduleTimes: z.array(z.string()), until: isoDate }))
+    .optional()
+    .nullable(),
   notes: z.string().optional().nullable(),
   createdAt: z.string(),
   updatedAt: z.string(),
@@ -103,18 +116,24 @@ export async function exportBackup(): Promise<string> {
 }
 
 export interface ImportResult {
+  /** Entries written. They were missing here, or the file has a newer edit of them. */
   symptoms: number;
   factors: number;
   schedules: number;
   doses: number;
+  /** Rows that could not be read. */
   skipped: number;
+  /** Entries this device has a newer version of, so its version was kept. */
+  keptLocal: number;
 }
 
 /**
- * Merges a backup into the current data. Entries with the same id are replaced,
- * nothing else is removed. Invalid rows are skipped and counted.
+ * Merges a backup into the current data. Entries that are not here are added, which also brings
+ * back deleted ones. An entry that is here is replaced only by a newer edit from the file, so
+ * changes made on this device after the backup are kept. A dose is not added when this device
+ * already has a record for the same dose. Nothing is removed. Invalid rows are skipped and counted.
  */
-export async function importBackup(text: string): Promise<ImportResult> {
+export async function importBackup(text: string, now = new Date()): Promise<ImportResult> {
   let raw: unknown;
   try {
     raw = JSON.parse(text);
@@ -158,23 +177,80 @@ export async function importBackup(text: string): Promise<ImportResult> {
       notes: [m.dose, m.notes].filter(Boolean).join(' · ') || undefined,
     });
   }
-  const schedules = take(data.schedules, scheduleSchema).map(s => stripNulls(s) as MedicationSchedule);
+  // Files from the old app have no format field. It could not record doses, so tracking starts now.
+  const legacy = data.format !== BACKUP_FORMAT;
+  const schedules = take(data.schedules, scheduleSchema).map(s => {
+    const row = stripNulls(s) as MedicationSchedule;
+    return legacy ? startTrackingAt(row, now) : row;
+  });
   const doses = take(data.adherence, doseSchema).map(d => stripNulls(d) as MedicationAdherence);
 
   const idb = await initDB();
   const tx = idb.transaction(['symptoms', 'factors', 'schedules', 'adherence', 'preferences'], 'readwrite');
+  // Read what is here before writing anything. Waiting only on these requests keeps the transaction open.
+  const [localSymptoms, localFactors, localSchedules, localDoses, localPrefs] = await Promise.all([
+    tx.objectStore('symptoms').getAll() as Promise<Symptom[]>,
+    tx.objectStore('factors').getAll() as Promise<Factor[]>,
+    tx.objectStore('schedules').getAll() as Promise<MedicationSchedule[]>,
+    tx.objectStore('adherence').getAll() as Promise<MedicationAdherence[]>,
+    tx.objectStore('preferences').get('user-preferences'),
+  ]);
+
+  let keptLocal = 0;
+  const editedAt = (iso?: string) => {
+    const t = iso ? Date.parse(iso) : NaN;
+    return Number.isNaN(t) ? 0 : t;
+  };
+  /** Rows that are not here, or that the file has a newer edit of. A missing edit time counts as oldest. */
+  const toWrite = <T extends { id: string; updatedAt?: string }>(incoming: T[], local: T[]): T[] => {
+    const here = new Map(local.map(r => [r.id, r]));
+    return incoming.filter(r => {
+      const mine = here.get(r.id);
+      if (!mine || editedAt(r.updatedAt) > editedAt(mine.updatedAt)) return true;
+      if (editedAt(mine.updatedAt) > editedAt(r.updatedAt)) keptLocal++;
+      return false;
+    });
+  };
+  const symptomRows = toWrite(symptoms, localSymptoms);
+  const factorRows = toWrite(factors, localFactors);
+  const scheduleRows = toWrite(schedules, localSchedules);
+
+  // Dose records have no edit time. Keep this device's record for the same id or the same dose, so
+  // an old "skipped" record cannot come back next to the "taken" record that replaced it.
+  const doseKey = (d: MedicationAdherence) => `${d.scheduleId}|${d.scheduledTime}`;
+  const localDoseById = new Map(localDoses.map(d => [d.id, d]));
+  const localDoseKeys = new Set(localDoses.map(doseKey));
+  const doseRows = doses.filter(d => {
+    const mine = localDoseById.get(d.id);
+    if (mine) {
+      if (mine.status !== d.status || mine.scheduledTime !== d.scheduledTime) keptLocal++;
+      return false;
+    }
+    if (localDoseKeys.has(doseKey(d))) {
+      keptLocal++;
+      return false;
+    }
+    return true;
+  });
+
   const writes: Promise<unknown>[] = [
-    ...symptoms.map(s => tx.objectStore('symptoms').put(s)),
-    ...factors.map(f => tx.objectStore('factors').put(f)),
-    ...schedules.map(s => tx.objectStore('schedules').put(s)),
-    ...doses.map(d => tx.objectStore('adherence').put(d)),
+    ...symptomRows.map(s => tx.objectStore('symptoms').put(s)),
+    ...factorRows.map(f => tx.objectStore('factors').put(f)),
+    ...scheduleRows.map(s => tx.objectStore('schedules').put(s)),
+    ...doseRows.map(d => tx.objectStore('adherence').put(d)),
   ];
 
   if (data.preferences) {
     const incoming = normalizePreferences(data.preferences);
-    const current = normalizePreferences(await tx.objectStore('preferences').get('user-preferences'));
+    const current = normalizePreferences(localPrefs);
     const mergeNames = (a: string[], b: string[]) =>
       Array.from(new Map([...a, ...b].map(n => [n.toLowerCase(), n])).values());
+    // Take the license key from the file only when this device has none, or the server rejected the
+    // one here (the check time is then set to 0). Never take a check time from a file, so a key from
+    // a backup is checked before it unlocks Pro.
+    const rejectedHere =
+      !current.licenseToken || (current.licenseCheckedAt !== undefined && Date.parse(current.licenseCheckedAt) === 0);
+    const adoptKey = Boolean(incoming.licenseToken) && incoming.licenseToken !== current.licenseToken && rejectedHere;
     writes.push(
       tx.objectStore('preferences').put({
         ...current,
@@ -183,7 +259,8 @@ export async function importBackup(text: string): Promise<ImportResult> {
           new Map([...current.customFactors, ...incoming.customFactors].map(f => [f.name.toLowerCase(), f])).values(),
         ),
         reportName: current.reportName ?? incoming.reportName,
-        licenseToken: current.licenseToken ?? incoming.licenseToken,
+        licenseToken: adoptKey ? incoming.licenseToken : current.licenseToken,
+        licenseCheckedAt: adoptKey ? undefined : current.licenseCheckedAt,
         onboardedAt: current.onboardedAt ?? incoming.onboardedAt,
       }),
     );
@@ -192,11 +269,12 @@ export async function importBackup(text: string): Promise<ImportResult> {
   db.notifyChanged();
 
   return {
-    symptoms: symptoms.length,
-    factors: factors.length,
-    schedules: schedules.length,
-    doses: doses.length,
+    symptoms: symptomRows.length,
+    factors: factorRows.length,
+    schedules: scheduleRows.length,
+    doses: doseRows.length,
     skipped,
+    keptLocal,
   };
 }
 

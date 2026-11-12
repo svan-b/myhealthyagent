@@ -1,5 +1,6 @@
 // lib/db/init.ts
 import { openDB, type IDBPDatabase } from 'idb';
+import { startTrackingAt } from '@/lib/medication/doses';
 
 export const DB_NAME = 'myHealthyAgent';
 // v1 symptoms/templates/preferences, v2 meds, v3 schedules/adherence, v4 factors + data fixes
@@ -68,6 +69,15 @@ export function initDB(): Promise<IDBPDatabase> {
               timestamp: m.timestamp,
               notes: [m.dose, m.notes].filter(Boolean).join(' · ') || undefined,
             });
+          }
+          // The last version 3 release could add medications but had no way to record a dose.
+          // Count adherence from the upgrade on, so the months before do not show as missed doses.
+          // createdAt keeps the original date.
+          const upgradedAt = new Date();
+          let scheduleCursor = await tx.objectStore('schedules').openCursor();
+          while (scheduleCursor) {
+            await scheduleCursor.update(startTrackingAt(scheduleCursor.value, upgradedAt));
+            scheduleCursor = await scheduleCursor.continue();
           }
         }
       },
