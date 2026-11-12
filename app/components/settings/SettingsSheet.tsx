@@ -15,7 +15,7 @@ import { db } from '@/lib/db/client';
 import { downloadFile, exportBackup, exportCSV, importBackup } from '@/lib/db/backup';
 import { usePro } from '@/lib/pro/client';
 import { config } from '@/lib/config';
-import { errorMessage } from '@/lib/utils';
+import { describeRestore, errorMessage } from '@/lib/utils';
 import { reportErrorMessage, UNPRINTED_CHARACTERS } from '@/lib/report/messages';
 import { LicenseKeyForm, ManageBilling, UpgradeCard } from '../pro/Upgrade';
 
@@ -157,9 +157,7 @@ function BackupSection() {
     try {
       if (file.size > 50 * 1024 * 1024) throw new Error('That file is too large to be a backup.');
       const r = await importBackup(await file.text());
-      toast.success('Backup restored', {
-        description: `${r.symptoms} symptoms, ${r.factors} other entries, ${r.schedules} medications${r.skipped ? `. ${r.skipped} unreadable rows skipped.` : '.'}`,
-      });
+      toast.success('Backup restored', { description: describeRestore(r) });
     } catch (e) {
       toast.error(errorMessage(e, 'Could not restore that file'));
     } finally {
@@ -202,7 +200,8 @@ function BackupSection() {
           }}
         />
         <p className="text-[13px] text-subtle">
-          Restoring adds entries from the file. It never removes what is already here.
+          Restoring adds entries from the file. It never removes what is already here, and changes made on this device
+          since the backup are kept.
         </p>
       </Card>
     </Group>

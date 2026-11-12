@@ -186,7 +186,8 @@ function SymptomRow({ s }: { s: Symptom }) {
           {[duration, ...(s.tags ?? [])].filter(Boolean).join(' · ')}
         </span>
       )}
-      {s.notes && <span className="block text-sm text-muted mt-1 line-clamp-2">{s.notes}</span>}
+      {/* A note added when the symptom was logged again as the same one starts on its own line. */}
+      {s.notes && <span className="block text-sm text-muted mt-1 line-clamp-2 whitespace-pre-line">{s.notes}</span>}
     </span>
   );
 }
@@ -199,7 +200,7 @@ function FactorRow({ f }: { f: Factor }) {
         <span className="text-fg truncate">{f.name}</span>
         <span className="ml-auto text-sm text-subtle shrink-0">{CATEGORY_LABELS[f.category]}</span>
       </span>
-      {f.notes && <span className="block text-sm text-muted mt-1 line-clamp-2">{f.notes}</span>}
+      {f.notes && <span className="block text-sm text-muted mt-1 line-clamp-2 whitespace-pre-line">{f.notes}</span>}
     </span>
   );
 }

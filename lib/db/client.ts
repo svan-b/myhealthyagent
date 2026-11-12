@@ -17,6 +17,9 @@ export function cleanName(name: string): string {
   return name.replace(/\s+/g, ' ').trim().slice(0, MAX_NAME_LENGTH);
 }
 
+/** A name as the Log screen compares names, ignoring case and extra spaces. */
+const nameKey = (name: string) => cleanName(name).toLowerCase();
+
 function cleanNote(note?: string): string | undefined {
   const n = note?.trim().slice(0, MAX_NOTE_LENGTH);
   return n ? n : undefined;
@@ -143,6 +146,39 @@ export const db = {
     notify();
   },
 
+  /**
+   * For a symptom logged again while an earlier entry of it is still going. Instead of a new entry, the
+   * earlier one is marked still going, takes the new severity when that is higher, and gets the new note
+   * after its own. Returns the entry as it was, for Undo, and as it is now.
+   */
+  async continueSymptom(
+    id: string,
+    update: { severity: number; notes?: string },
+  ): Promise<{ before: Symptom; after: Symptom }> {
+    const idb = await initDB();
+    const tx = idb.transaction('symptoms', 'readwrite');
+    const before = (await tx.store.get(id)) as Symptom | undefined;
+    if (!before) {
+      await tx.done;
+      throw new Error('The earlier entry was deleted. Tap Save again to log this as a new one.');
+    }
+    const after: Symptom = {
+      ...normalizeSymptom({
+        ...before,
+        severity: Math.max(before.severity, update.severity),
+        ongoing: true,
+        duration_minutes: undefined,
+        notes: [before.notes?.trim(), cleanNote(update.notes)].filter(Boolean).join('\n'),
+      }),
+      updatedAt: new Date().toISOString(),
+    };
+    await tx.store.put(after);
+    await tx.done;
+    await this.recordActivity();
+    notify();
+    return { before, after };
+  },
+
   async getAllSymptoms(): Promise<Symptom[]> {
     const idb = await initDB();
     const rows = (await idb.getAll('symptoms')) as Symptom[];
@@ -255,6 +291,76 @@ export const db = {
       ...prefs.customFactors.filter(f => f.name.toLowerCase() !== clean.toLowerCase()),
     ].slice(0, 30);
     await this.updatePreferences({ customFactors: list });
+  },
+
+  // The functions below edit the Log screen's own lists. Names match ignoring case and extra spaces, as on
+  // the Log screen, because names restored from a backup are stored as they were typed.
+
+  /** Takes a symptom off the Log screen's own list. Entries already logged keep it. */
+  async forgetCustomSymptom(name: string): Promise<void> {
+    const k = nameKey(name);
+    await this.updatePreferences(p =>
+      p.customSymptoms.some(s => nameKey(s) === k)
+        ? { customSymptoms: p.customSymptoms.filter(s => nameKey(s) !== k) }
+        : null,
+    );
+  },
+
+  /** Puts a symptom taken off the list back at the given place, for Undo. */
+  async putBackCustomSymptom(name: string, index: number): Promise<void> {
+    const clean = cleanName(name);
+    await this.updatePreferences(p => {
+      if (!clean || p.customSymptoms.some(s => nameKey(s) === nameKey(clean))) return null;
+      const list = [...p.customSymptoms];
+      list.splice(Math.max(0, Math.min(index, list.length)), 0, clean);
+      return { customSymptoms: list.slice(0, 20) };
+    });
+  },
+
+  /** Takes an item off the Log screen's own list. Entries already logged keep it. */
+  async forgetCustomFactor(name: string): Promise<void> {
+    const k = nameKey(name);
+    await this.updatePreferences(p =>
+      p.customFactors.some(f => nameKey(f.name) === k)
+        ? { customFactors: p.customFactors.filter(f => nameKey(f.name) !== k) }
+        : null,
+    );
+  },
+
+  /** Puts an item taken off the list back at the given place, for Undo. */
+  async putBackCustomFactor(item: { name: string; category: Factor['category'] }, index: number): Promise<void> {
+    const clean = cleanName(item.name);
+    await this.updatePreferences(p => {
+      if (!clean || p.customFactors.some(f => nameKey(f.name) === nameKey(clean))) return null;
+      const list = [...p.customFactors];
+      list.splice(Math.max(0, Math.min(index, list.length)), 0, { name: clean, category: item.category });
+      return { customFactors: list.slice(0, 30) };
+    });
+  },
+
+  /** Sets the category an item on the Log screen's own list is saved with from now on. */
+  async setCustomFactorCategory(name: string, category: Factor['category']): Promise<void> {
+    const k = nameKey(name);
+    await this.updatePreferences(p => {
+      if (!p.customFactors.some(f => nameKey(f.name) === k && f.category !== category)) return null;
+      return { customFactors: p.customFactors.map(f => (nameKey(f.name) === k ? { ...f, category } : f)) };
+    });
+  },
+
+  /**
+   * Moves the entries already logged for an item to another category, when the person asks for it after
+   * fixing the item's category. Returns those entries as they were, so Undo can put them back.
+   */
+  async setLoggedFactorCategory(name: string, category: Factor['category']): Promise<Factor[]> {
+    const k = nameKey(name);
+    const idb = await initDB();
+    const tx = idb.transaction('factors', 'readwrite');
+    const rows = (await tx.store.getAll()) as Factor[];
+    const before = rows.filter(f => nameKey(f.name) === k && f.category !== category);
+    const at = new Date().toISOString();
+    await Promise.all([...before.map(f => tx.store.put({ ...f, category, updatedAt: at })), tx.done]);
+    if (before.length) notify();
+    return before;
   },
 
   // ----- Medication schedules -----

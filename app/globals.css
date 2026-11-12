@@ -60,6 +60,15 @@
   --on-sev-2: #0f1c2a;
   --on-sev-3: #0f1c2a;
   --on-sev-4: #ffffff;
+  /*
+   * Border of a chosen severity button, a darker shade of its fill. Some fills are too light to stand out
+   * from the page, so the border does. Each is at least 4.5:1 against bg, surface and surface-2, where
+   * WCAG 1.4.11 asks for 3:1.
+   */
+  --edge-sev-1: #30796d;
+  --edge-sev-2: #8e6813;
+  --edge-sev-3: #b4511a;
+  --edge-sev-4: #942420;
 }
 
 .dark {
@@ -91,6 +100,11 @@
   --on-sev-2: #0b1218;
   --on-sev-3: #0b1218;
   --on-sev-4: #0b1218;
+  /* On a dark page the border is a lighter shade instead, so it still stands out. */
+  --edge-sev-1: #9ad5cb;
+  --edge-sev-2: #f2dda9;
+  --edge-sev-3: #f4b895;
+  --edge-sev-4: #f2928d;
 }
 
 html {

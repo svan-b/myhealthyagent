@@ -116,14 +116,15 @@ export function InsightsScreen() {
             <Card className="mt-3 divide-y divide-line">
               {summary.slice(0, 8).map(s => (
                 <div key={s.name} className="px-4 py-3 flex items-center gap-3">
+                  {/* The dot and "usually" both use the middle rating, a level the person actually logged. */}
                   <span
                     className="size-2.5 rounded-full shrink-0"
-                    style={{ backgroundColor: severityColor(s.avgSeverity) }}
+                    style={{ backgroundColor: severityColor(s.typicalSeverity) }}
                     aria-hidden
                   />
                   <span className="font-medium text-fg truncate">{s.name}</span>
                   <span className="ml-auto text-sm text-muted text-right shrink-0">
-                    {s.days} {s.days === 1 ? 'day' : 'days'}, usually {severityLabel(s.avgSeverity).toLowerCase()}
+                    {s.days} {s.days === 1 ? 'day' : 'days'}, usually {severityLabel(s.typicalSeverity).toLowerCase()}
                   </span>
                 </div>
               ))}

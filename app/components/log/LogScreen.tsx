@@ -1,17 +1,20 @@
 'use client';
 
 import * as React from 'react';
-import { ChevronLeft, Plus, Flame } from 'lucide-react';
+import { ChevronLeft, Plus, Flame, Pencil } from 'lucide-react';
 import { toast } from 'sonner';
 import { Button } from '@/components/ui/button';
 import { Chip, Segmented } from '@/components/ui/chip';
 import { Input, Select, Textarea } from '@/components/ui/field';
 import { Card, SectionTitle } from '@/components/ui/card';
+import { Sheet } from '@/components/ui/sheet';
 import { WHEN_NOW, WhenPicker, resolveWhen, type When } from './WhenPicker';
+import { continuedToday, dayWord, openEarlierLog, startedAt } from './episodes';
+import { YourItemsSheet, YourSymptomsSheet, yourItems, yourSymptoms } from './YoursSheet';
 import { cleanName, db, requestPersistentStorage } from '@/lib/db/client';
 import { useHealthData } from '@/lib/hooks/useHealthData';
 import { COMMON_SYMPTOMS, DURATION_OPTIONS, FACTOR_GROUPS, CATEGORY_LABELS } from '@/lib/catalog';
-import type { FactorCategory } from '@/lib/db/schema';
+import type { FactorCategory, Symptom } from '@/lib/db/schema';
 import { SEVERITY_LEVELS, cn, errorMessage, newId, severityColor, severityLabel, formatDuration } from '@/lib/utils';
 
 type Mode = 'symptom' | 'factor';
@@ -68,8 +71,11 @@ async function afterFirstLog() {
   await requestPersistentStorage();
 }
 
+/** What the person entered, kept while the Log screen asks whether it is the same symptom as an earlier entry. */
+type SymptomDraft = { name: string; severity: number; at: Date; duration: number; note: string };
+
 function SymptomFlow() {
-  const { prefs } = useHealthData();
+  const { prefs, symptoms } = useHealthData();
   const [name, setName] = React.useState<string | null>(null);
   const [custom, setCustom] = React.useState('');
   const [severity, setSeverity] = React.useState<number | null>(null);
@@ -78,17 +84,14 @@ function SymptomFlow() {
   const [note, setNote] = React.useState('');
   const [showNote, setShowNote] = React.useState(false);
   const [saving, setSaving] = React.useState(false);
+  const [editing, setEditing] = React.useState(false);
+  const [asking, setAsking] = React.useState<{ draft: SymptomDraft; earlier: Symptom } | null>(null);
+  // One answer per question, also when a tap on a button and a tap outside the sheet arrive together.
+  const answered = React.useRef(false);
   const timeMissing = resolveWhen(when) === null;
 
-  const options = React.useMemo(() => {
-    const seen = new Set<string>();
-    return [...prefs.customSymptoms, ...COMMON_SYMPTOMS].filter(s => {
-      const k = s.toLowerCase();
-      if (seen.has(k)) return false;
-      seen.add(k);
-      return true;
-    });
-  }, [prefs.customSymptoms]);
+  const yours = React.useMemo(() => yourSymptoms(prefs.customSymptoms), [prefs.customSymptoms]);
+  const options = React.useMemo(() => [...yours, ...COMMON_SYMPTOMS], [yours]);
 
   const reset = () => {
     setName(null);
@@ -107,29 +110,26 @@ function SymptomFlow() {
     setCustom('');
   };
 
-  const save = async () => {
-    if (!name || severity == null) return;
-    // Work out the time now, so "1 hr ago" means an hour before Save was tapped.
-    const at = resolveWhen(when);
-    if (!at) {
-      toast.error('Please enter a valid date and time');
-      return;
+  const remember = async (symptom: string) => {
+    if (!COMMON_SYMPTOMS.some(s => s.toLowerCase() === symptom.toLowerCase())) {
+      await db.rememberCustomSymptom(symptom);
     }
+  };
+
+  const saveNew = async (draft: SymptomDraft) => {
     setSaving(true);
-    const d = DURATION_OPTIONS[duration];
+    const d = DURATION_OPTIONS[draft.duration];
     try {
       const saved = await db.addSymptom({
         id: newId(),
-        name,
-        severity,
-        timestamp: at.toISOString(),
+        name: draft.name,
+        severity: draft.severity,
+        timestamp: draft.at.toISOString(),
         duration_minutes: d.minutes,
         ongoing: d.ongoing,
-        notes: note,
+        notes: draft.note,
       });
-      if (!COMMON_SYMPTOMS.some(s => s.toLowerCase() === name.toLowerCase())) {
-        await db.rememberCustomSymptom(name);
-      }
+      await remember(draft.name);
       toast.success(`${saved.name} logged`, {
         description: severityLabel(saved.severity),
         action: { label: 'Undo', onClick: () => db.deleteSymptom(saved.id) },
@@ -143,16 +143,80 @@ function SymptomFlow() {
     }
   };
 
+  /** For "Same one". No new entry is added. The earlier entry stays still going and takes the new rating and note. */
+  const addToEarlier = async ({ draft, earlier }: { draft: SymptomDraft; earlier: Symptom }) => {
+    setSaving(true);
+    try {
+      const { before, after } = await db.continueSymptom(earlier.id, { severity: draft.severity, notes: draft.note });
+      await remember(draft.name);
+      const level = severityLabel(after.severity);
+      const raised = level !== severityLabel(before.severity) ? `, now ${level.toLowerCase()}` : '';
+      toast.success(`${after.name} updated`, {
+        description: `Still going ${startedAt(before.timestamp).since}${raised}. No new entry was added.`,
+        // Puts the earlier entry back exactly as it was.
+        action: { label: 'Undo', onClick: () => db.restoreSymptom(before) },
+      });
+      reset();
+      afterFirstLog();
+    } catch (e) {
+      toast.error(errorMessage(e, 'Could not save. Please try again.'));
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const save = async () => {
+    if (!name || severity == null) return;
+    // Work out the time now, so "1 hr ago" means an hour before Save was tapped.
+    const at = resolveWhen(when);
+    if (!at) {
+      toast.error('Please enter a valid date and time');
+      return;
+    }
+    const draft: SymptomDraft = { name, severity, at, duration, note };
+    // Logged again hours after an earlier entry that may still be going. Saved as a new entry, it would count as
+    // a new start, and whatever was done in between could look like a trigger. Only the person knows, so ask.
+    // A time in the future is left for the save to refuse.
+    const earlier = at.getTime() <= Date.now() ? openEarlierLog(symptoms, name, at.getTime()) : null;
+    if (earlier) {
+      answered.current = false;
+      setAsking({ draft, earlier });
+      return;
+    }
+    await saveNew(draft);
+  };
+
+  /** Closing the question without an answer saves a new entry, as if the question had not been asked. */
+  const answer = (sameOne: boolean) => {
+    if (!asking || answered.current) return;
+    answered.current = true;
+    setAsking(null);
+    void (sameOne ? addToEarlier(asking) : saveNew(asking.draft));
+  };
+
   if (!name) {
+    const chips = (list: string[]) => (
+      <div className="grid grid-cols-2 gap-2">
+        {list.map(s => (
+          <Chip key={s} onClick={() => setName(s)} className="truncate">
+            {s}
+          </Chip>
+        ))}
+      </div>
+    );
     return (
       <div>
-        <div className="grid grid-cols-2 gap-2">
-          {options.map(s => (
-            <Chip key={s} onClick={() => setName(s)} className="truncate">
-              {s}
-            </Chip>
-          ))}
-        </div>
+        {yours.length > 0 ? (
+          <div className="space-y-5">
+            <ChipGroup title="Yours" edit={{ label: 'your symptoms', onClick: () => setEditing(true) }}>
+              {chips(yours)}
+            </ChipGroup>
+            <ChipGroup title="Common">{chips(COMMON_SYMPTOMS)}</ChipGroup>
+          </div>
+        ) : (
+          chips(COMMON_SYMPTOMS)
+        )}
+        {editing && <YourSymptomsSheet onClose={() => setEditing(false)} />}
         <form
           className="flex gap-2 mt-3"
           onSubmit={e => {
@@ -204,8 +268,9 @@ function SymptomFlow() {
                   'min-h-20 rounded-xl border-2 p-3 text-left transition-colors',
                   !selected && 'bg-surface border-line-strong hover:border-accent',
                 )}
-                // The text color is set per level and theme so the label and hint stay readable on the fill.
-                style={selected ? { backgroundColor: l.color, borderColor: l.color, color: l.on } : undefined}
+                // The text color is set per level and theme so the label and hint stay readable on the fill. The
+                // border is a darker shade (lighter in the dark theme), so the chosen button stands out from the page.
+                style={selected ? { backgroundColor: l.color, borderColor: l.edge, color: l.on } : undefined}
               >
                 <span className="flex items-center gap-2 font-semibold">
                   {!selected && (
@@ -269,7 +334,75 @@ function SymptomFlow() {
                 : `Save ${name.toLowerCase()}`}
         </Button>
       </div>
+
+      {asking && <SameSymptomSheet name={asking.draft.name} earlier={asking.earlier} onAnswer={answer} />}
     </div>
+  );
+}
+
+/** Asks whether a symptom logged again is the one from the earlier entry, still going, or a new one. */
+function SameSymptomSheet({
+  name,
+  earlier,
+  onAnswer,
+}: {
+  name: string;
+  earlier: Symptom;
+  onAnswer: (sameOne: boolean) => void;
+}) {
+  const lower = name.toLowerCase();
+  const how = earlier.ongoing ? 'as still going' : 'without saying how long it lasted';
+  return (
+    <Sheet
+      open
+      onOpenChange={o => !o && onAnswer(false)}
+      title={`Is this the same ${lower}?`}
+      description={`You logged ${lower} ${startedAt(earlier.timestamp).at} ${how}. If it has not stopped since, it is the same one.`}
+    >
+      <div className="grid gap-2 pt-1">
+        <Button size="lg" block onClick={() => onAnswer(true)}>
+          Same one, still going
+        </Button>
+        <Button size="lg" block variant="secondary" onClick={() => onAnswer(false)}>
+          New one
+        </Button>
+      </div>
+    </Sheet>
+  );
+}
+
+/**
+ * A group of chips with a title. With `edit`, the title row also has an Edit button. The title then stays the
+ * group's name for screen readers, without the button's words in it.
+ */
+function ChipGroup({
+  title,
+  edit,
+  children,
+}: {
+  title: string;
+  edit?: { label: string; onClick: () => void };
+  children: React.ReactNode;
+}) {
+  return (
+    <fieldset>
+      {edit ? (
+        <>
+          <legend className="sr-only">{title}</legend>
+          <div className="flex items-center justify-between gap-3 mb-2">
+            <span aria-hidden className="text-sm font-semibold text-fg">
+              {title}
+            </span>
+            <Button variant="quiet" size="sm" onClick={edit.onClick} className="h-8 -my-1 -mr-2">
+              <Pencil aria-hidden /> Edit<span className="sr-only"> {edit.label}</span>
+            </Button>
+          </div>
+        </>
+      ) : (
+        <legend className="text-sm font-semibold text-fg mb-2">{title}</legend>
+      )}
+      {children}
+    </fieldset>
   );
 }
 
@@ -281,10 +414,11 @@ function FactorFlow() {
   const [customCategory, setCustomCategory] = React.useState<FactorCategory>('food');
   const [note, setNote] = React.useState('');
   const [saving, setSaving] = React.useState(false);
+  const [editing, setEditing] = React.useState(false);
   const timeMissing = resolveWhen(when) === null;
 
   const builtIn = new Set(FACTOR_GROUPS.flatMap(g => g.items.map(i => i.name.toLowerCase())));
-  const yours = prefs.customFactors.filter(f => !builtIn.has(f.name.toLowerCase()));
+  const yours = yourItems(prefs.customFactors);
 
   const toggle = (name: string, category: FactorCategory) =>
     setSelected(prev => {
@@ -366,11 +500,14 @@ function FactorFlow() {
           items={[...yours, ...extraSelected.map(([name, category]) => ({ name, category }))]}
           selected={selected}
           onToggle={toggle}
+          edit={yours.length > 0 ? { label: 'your items', onClick: () => setEditing(true) } : undefined}
         />
       )}
       {FACTOR_GROUPS.map(g => (
         <FactorGroup key={g.title} title={g.title} items={g.items} selected={selected} onToggle={toggle} />
       ))}
+      {/* Outside the group, so the sheet stays open when the last item is removed. */}
+      {editing && <YourItemsSheet onClose={() => setEditing(false)} />}
 
       <form
         className="space-y-2"
@@ -448,15 +585,16 @@ function FactorGroup({
   items,
   selected,
   onToggle,
+  edit,
 }: {
   title: string;
   items: { name: string; category: FactorCategory }[];
   selected: Map<string, FactorCategory>;
   onToggle: (name: string, category: FactorCategory) => void;
+  edit?: { label: string; onClick: () => void };
 }) {
   return (
-    <fieldset>
-      <legend className="text-sm font-semibold text-fg mb-2">{title}</legend>
+    <ChipGroup title={title} edit={edit}>
       <div className="flex flex-wrap gap-2">
         {items.map(i => (
           <Chip
@@ -469,16 +607,18 @@ function FactorGroup({
           </Chip>
         ))}
       </div>
-    </fieldset>
+    </ChipGroup>
   );
 }
 
 function TodayList() {
   const { symptoms, factors } = useHealthData();
-  const today = new Date().toDateString();
+  const now = new Date();
+  const today = now.toDateString();
   const items = [
     ...symptoms
-      .filter(s => new Date(s.timestamp).toDateString() === today)
+      // A symptom still going from yesterday that was logged again today as the same one is listed too.
+      .filter(s => new Date(s.timestamp).toDateString() === today || continuedToday(s, now))
       .map(s => ({ kind: 'symptom' as const, t: s.timestamp, s })),
     ...factors
       .filter(f => new Date(f.timestamp).toDateString() === today)
@@ -492,6 +632,9 @@ function TodayList() {
         {items.map(i => (
           <div key={i.kind === 'symptom' ? i.s.id : i.f.id} className="flex items-center gap-3 px-4 py-3">
             <span className="text-sm text-subtle w-16 shrink-0 tabular-nums">
+              {new Date(i.t).toDateString() !== today && (
+                <span className="block text-[12px]">{dayWord(new Date(i.t), now)}</span>
+              )}
               {new Date(i.t).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })}
             </span>
             {i.kind === 'symptom' ? (

@@ -117,7 +117,9 @@ export function Sheet({
             'sm:inset-auto sm:left-1/2 sm:top-1/2 sm:-translate-x-1/2 sm:-translate-y-1/2 sm:w-[min(32rem,calc(100vw-2rem))] sm:rounded-3xl sm:max-h-[85dvh]',
             className,
           )}
-          aria-describedby={description ? undefined : undefined}
+          // With a description, Radix links it to the sheet so it is read after the title. Without one, the sheet
+          // must say it has none, so nothing is linked and Radix does not warn about a missing description.
+          {...(description ? {} : { 'aria-describedby': undefined })}
           onOpenAutoFocus={e => {
             stopWatching?.();
             opener.current = e.currentTarget instanceof Element ? findOpener(e.currentTarget) : null;
@@ -131,10 +133,8 @@ export function Sheet({
           <div className="flex items-start justify-between gap-4 px-5 pt-5 pb-3">
             <div>
               <Dialog.Title className="text-lg font-bold text-fg">{title}</Dialog.Title>
-              {description ? (
+              {description && (
                 <Dialog.Description className="text-sm text-muted mt-0.5">{description}</Dialog.Description>
-              ) : (
-                <Dialog.Description className="sr-only">{title}</Dialog.Description>
               )}
             </div>
             <Dialog.Close

@@ -43,6 +43,7 @@ export function WhenPicker({
   label?: string;
 }) {
   const id = React.useId();
+  const hintId = `${id}-hint`;
   const incomplete = value.kind === 'at' && !fromLocalInputValue(value.local);
   const { earlier } = value;
 
@@ -88,18 +89,22 @@ export function WhenPicker({
             value={value.local}
             max={toLocalInputValue(new Date())}
             aria-invalid={incomplete || undefined}
-            aria-describedby={incomplete ? `${id}-hint` : undefined}
+            aria-describedby={hintId}
             className={cn(incomplete && 'border-danger')}
             onChange={e => {
               const local = e.target.value;
               onChange({ kind: 'at', local, earlier: fromLocalInputValue(local) ? local : undefined });
             }}
           />
-          {incomplete && (
-            <p id={`${id}-hint`} className="mt-1.5 text-sm font-medium text-danger">
-              Enter a full date and time.
-            </p>
-          )}
+          {/* Always in the page while the field shows, so screen readers announce the hint when it appears. */}
+          <p
+            id={hintId}
+            role="status"
+            aria-live="polite"
+            className={cn('text-sm font-medium text-danger', incomplete && 'mt-1.5')}
+          >
+            {incomplete ? 'Enter a full date and time.' : ''}
+          </p>
         </div>
       )}
     </fieldset>

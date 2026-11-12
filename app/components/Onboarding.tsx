@@ -7,7 +7,7 @@ import { Button } from '@/components/ui/button';
 import { Card } from '@/components/ui/card';
 import { db } from '@/lib/db/client';
 import { importBackup } from '@/lib/db/backup';
-import { errorMessage } from '@/lib/utils';
+import { describeRestore, errorMessage } from '@/lib/utils';
 import { iosSafariDevice, isIosHomeScreenApp } from './InstallPrompt';
 
 const STEPS = [
@@ -123,7 +123,7 @@ export function Onboarding() {
           if (!file) return;
           try {
             const r = await importBackup(await file.text());
-            toast.success('Backup restored', { description: `${r.symptoms} symptoms and ${r.factors} other entries.` });
+            toast.success('Backup restored', { description: describeRestore(r) });
             await start();
           } catch (err) {
             toast.error(errorMessage(err, 'Could not restore that file'));

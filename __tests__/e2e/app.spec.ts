@@ -214,18 +214,23 @@ test('works offline after the first visit', async ({ page, context }) => {
   await page.evaluate(async () => {
     await navigator.serviceWorker.ready;
   });
-  // Let the service worker finish caching what the page loaded
-  await page.waitForFunction(
-    async () => {
-      const keys = await caches.keys();
-      if (!keys.length) return false;
-      const cache = await caches.open(keys[0]);
-      const entries = await cache.keys();
-      return entries.some(r => r.url.includes('/_next/static/')) && entries.some(r => new URL(r.url).pathname === '/');
-    },
-    undefined,
-    { timeout: 20_000 },
-  );
+  // Let the service worker finish caching what the page loaded. page.waitForFunction would not wait for the
+  // promise an async check returns (a promise counts as true), so poll the check instead.
+  await expect
+    .poll(
+      () =>
+        page.evaluate(async () => {
+          const keys = await caches.keys();
+          if (!keys.length) return false;
+          const cache = await caches.open(keys[0]);
+          const entries = await cache.keys();
+          return (
+            entries.some(r => r.url.includes('/_next/static/')) && entries.some(r => new URL(r.url).pathname === '/')
+          );
+        }),
+      { timeout: 20_000 },
+    )
+    .toBe(true);
 
   await context.setOffline(true);
   await page.reload();
