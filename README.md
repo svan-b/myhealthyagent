@@ -7,8 +7,8 @@ People log how they feel and what they ate, drank or did. After about two weeks 
 ## What it does
 
 - **Log in seconds.** Pick a symptom, tap how bad it is, save. Foods, drinks, sleep, stress and activities are quick multi-select taps. Anything can be backdated.
-- **Possible triggers.** For every logged item and symptom, the app compares four delay windows (within 3 hours, 3 to 12 hours, 12 to 24 hours, 1 to 2 days) against the same hours of the day when the item was not logged. Results come with plain numbers ("bloating followed dairy 12 to 24 hours later 10 of 11 times, compared with 0% on nearby days without dairy").
-- **Patterns.** Time of day, weekday versus weekend, symptoms that show up together, and whether things are getting better or worse.
+- **Possible triggers.** For every logged item and symptom, the app compares four delay windows (within 3 hours, 3 to 12 hours, 12 to 24 hours, 1 to 2 days) against the same clock times on days when the item was not logged. Results come with plain numbers ("bloating followed dairy 12 to 24 hours later 10 of 11 times, compared with 0% on nearby days without dairy").
+- **Patterns.** Time of day, weekday versus weekend, symptoms that show up together, and whether things are getting better or worse. Each card appears only when chance is an unlikely explanation.
 - **Medications.** Schedules, a daily checklist with take and skip, as-needed doses, and 30 day adherence. Doses taken also feed the trigger finder so possible side effects can show up.
 - **Doctor report.** A clean multi-page PDF with an overview, symptom table, daily severity chart, possible triggers, medication adherence and the full log.
 - **Your data, your files.** Backup and restore (JSON), spreadsheet export (CSV), and delete everything. Deleting also removes the Pro license key from the device unless the person ticks "Keep my Pro license key on this device".
@@ -18,14 +18,17 @@ People log how they feel and what they ate, drank or did. After about two weeks 
 
 The method lives in [`lib/analysis/triggers.ts`](lib/analysis/triggers.ts) and is documented at the top of that file. In short:
 
-1. Time is split into 15 minute bins over the days the person actually logged something, so gaps in tracking never count as symptom free time.
-2. For each item and delay window, the test asks whether symptoms start inside the window more often than they start in the same hours of the day when the window is not active. Stratifying by hour of day matters. Without it, a daily habit like morning coffee looks like a trigger simply because symptoms happen during the day.
-3. The count is tested exactly against a Poisson binomial distribution, then every p value is corrected with Benjamini–Hochberg across all comparisons.
-4. Only findings that survive correction, show at least a 1.5x rise and happened at least 3 times are shown. Items logged at the same time every day cannot be separated from time of day, so they are not tested.
+1. Time is split into 15 minute bins over the days the person tracked, meaning days with a symptom or a Log tab entry. Gaps in tracking never count as symptom free time. A day with only a pill ticked off on the Meds tab does not count as tracked, because it says nothing about symptoms that day.
+2. Symptoms are counted by episode. Logging a symptom again while it is still there is not a new start. A new episode begins only after the previous one is over, which is its logged duration plus an hour, or 6 hours after the last log when the duration is unknown. Without this, lying down or taking a painkiller because of a headache, then logging the headache again, would make the painkiller look like a trigger.
+3. For each item and delay window, the test asks whether symptoms start inside the window more often than at the same clock times on other tracked days. Comparing the same clock times matters. Without it, a daily habit like morning coffee looks like a trigger simply because symptoms happen during the day. All starts from one day move together in the comparison, so two episodes on one bad day are not treated as two independent chances.
+4. The count is tested exactly against that comparison, then every p value is corrected with Benjamini–Hochberg across all comparisons.
+5. Only findings that survive correction, show at least a 1.5x rise and happened at least 3 times are shown. Items logged at the same time every day cannot be separated from time of day, so they are not tested, and the app says which items and symptoms it could not check and why, so nothing looks ruled out that was never tested.
 
-On simulated random data with no real relationships, about 2% of datasets produce any finding and none are rated strong. On a planted 15 hour delayed reaction, the right item and delay window are found. Both cases are covered by tests.
+On simulated diaries with no real relationships, about 1 to 2% produce any finding and fewer than 1 in 300 produce a strong one, also when a symptom is logged several times a day. When an item and a symptom both come in streaks that last several days, such as a week of takeout during a week of flare ups, the rate rises to about 3%, because days are compared as if they were interchangeable. A planted reaction 15 hours after a food is found in every simulated diary and rated strong in 99%. These cases are covered by tests.
 
 Findings are associations in one person's data, not diagnoses, and the app says so wherever they appear.
+
+The pattern cards (time of day, weekday versus weekend, symptoms that show up together, getting better or worse) are tested the same way before they appear, with exact tests and a correction for the number of symptoms checked. On simulated diaries with nothing going on, each card shows up in at most about 4% of them.
 
 ## Privacy model
 
@@ -33,6 +36,7 @@ Findings are associations in one person's data, not diagnoses, and the app says 
 - The server only serves the app and, if Pro is enabled, talks to Stripe. License keys identify a Stripe customer and purchase and contain no health data. A license key never opens billing. "Manage billing" goes to Stripe's customer portal, where Stripe emails a one time sign in code.
 - No analytics, cookies, ads or third party scripts. A strict Content Security Policy blocks connections to any other origin.
 - The app asks the browser for persistent storage after the first log, reminds people to back up, and suggests installing to the home screen because Safari can clear data for sites that are not visited for a while.
+- On iPhone and iPad, an app added to the Home Screen gets its own storage and starts empty. When someone who already has entries installs it, the app first has them download a backup, then add it to the Home Screen, then restore the backup inside the installed app. Nothing is sent anywhere on the way.
 
 See [`app/privacy/page.tsx`](app/privacy/page.tsx) and [`app/terms/page.tsx`](app/terms/page.tsx) for the user facing privacy notice and terms. Have them reviewed by a lawyer for your jurisdiction before charging money.
 
