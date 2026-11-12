@@ -70,6 +70,19 @@ describe('rate limits (F38)', () => {
     expect(http.rateLimitTracked()).toBe(1);
     now.mockRestore();
   });
+
+  it('a server clock that is set back does not keep an address limited past its window', () => {
+    const now = jest.spyOn(Date, 'now').mockReturnValue(10_000_000);
+    // Someone makes a request, then the clock is corrected an hour back.
+    http.rateLimited(req('198.51.100.1'), 'checkout', 10);
+    now.mockReturnValue(10_000_000 - 3_600_000);
+    for (let i = 0; i < 10; i++) expect(http.rateLimited(req('203.0.113.7'), 'checkout', 10)).toBe(false);
+    expect(http.rateLimited(req('203.0.113.7'), 'checkout', 10)).toBe(true);
+    // Two minutes later this address's window is over, even though the older entry is not.
+    now.mockReturnValue(10_000_000 - 3_600_000 + 120_000);
+    expect(http.rateLimited(req('203.0.113.7'), 'checkout', 10)).toBe(false);
+    now.mockRestore();
+  });
 });
 
 /** A body that counts how much of it was pulled. */

@@ -73,7 +73,7 @@ test('a purchase is saved before the address is cleaned and finished after a fai
   });
 
   await page.goto(`/?checkout=success&session_id=${SESSION}`);
-  await expect(page.getByText('Payment received. Finishing activation.')).toBeVisible();
+  await expect(page.getByText('Thank you for your purchase. Finishing activation.')).toBeVisible();
   await expect(page.getByText('The app will keep trying automatically.')).toBeVisible();
   await expect(page).toHaveURL(/\/$/);
   expect(await readPrefs(page)).toMatchObject({ pendingCheckout: { sessionId: SESSION } });
@@ -101,6 +101,22 @@ test('a refused activation shows the reason, who to contact and the reference (F
   await expect(page.getByText(`contact support and quote reference ${SESSION}`)).toBeVisible();
   await expect(page.getByText('Request failed')).toHaveCount(0);
   await expect.poll(async () => (await readPrefs(page)).pendingCheckout).toBeUndefined();
+});
+
+test('a made up checkout link cannot put its own words in the toast (F04, F44)', async ({ page }) => {
+  await startFresh(page);
+  let requests = 0;
+  await page.route('**/api/license', route => {
+    requests++;
+    return route.abort();
+  });
+  await page.goto(`/?checkout=success&session_id=${encodeURIComponent('x. URGENT call +1 555 0100 to cancel')}`);
+  await expect(page.getByText('That checkout link is not complete, so Pro could not be turned on.')).toBeVisible();
+  await expect(page.getByText('If you were charged, contact support.')).toBeVisible();
+  await expect(page.getByText(/URGENT/)).toHaveCount(0);
+  await expect(page).toHaveURL(/\/$/);
+  expect((await readPrefs(page)).pendingCheckout).toBeUndefined();
+  expect(requests).toBe(0);
 });
 
 test('Delete all data removes the license key unless the person keeps it (F15)', async ({ page }) => {

@@ -3,14 +3,17 @@
 import type { MouseEvent } from 'react';
 import { toast } from 'sonner';
 import { config } from '@/lib/config';
-import { finishCheckout, type ActivationOutcome } from '@/lib/pro/client';
+import { CHECKOUT_SESSION_ID, finishCheckout, type ActivationOutcome } from '@/lib/pro/client';
 
 export const PRO_ACTIVE_MESSAGE = 'Thank you. Pro is active. Your license key is saved under Reports and data.';
 
-/** Who to contact about a purchase, quoting its checkout reference. */
+/**
+ * Who to contact about a purchase, quoting its checkout reference. The reference can come from the
+ * address, which anyone can write into a link, so it is only quoted when it is a real checkout id.
+ */
 export function supportText(reference: string, lead = 'If you were charged'): string {
   const who = config.supportEmail ? `email ${config.supportEmail}` : 'contact support';
-  return `${lead}, ${who} and quote reference ${reference.slice(0, 120)}.`;
+  return CHECKOUT_SESSION_ID.test(reference) ? `${lead}, ${who} and quote reference ${reference}.` : `${lead}, ${who}.`;
 }
 
 type Kind = 'loading' | 'success' | 'error' | 'info';
@@ -46,7 +49,7 @@ export function announceActivating(sessionId: string) {
 export function announceActivation(
   outcome: ActivationOutcome,
   sessionId: string,
-  { showPending = false, pendingTitle = 'Payment received. Finishing activation.' } = {},
+  { showPending = false, pendingTitle = 'Thank you for your purchase. Finishing activation.' } = {},
 ) {
   switch (outcome.state) {
     case 'active':

@@ -209,10 +209,43 @@ describe('checkout activation answers (F04)', () => {
   });
 
   it('a subscription paid by bank debit is still processing too', async () => {
-    mockStripe(() =>
-      session({ mode: 'subscription', subscription: 'sub_1', payment_status: 'unpaid', payment_intent: null }),
+    const calls = mockStripe(url =>
+      url.pathname === '/v1/subscriptions/sub_1'
+        ? { id: 'sub_1', status: 'incomplete', customer: 'cus_1' }
+        : session({ mode: 'subscription', subscription: 'sub_1', payment_status: 'unpaid', payment_intent: null }),
     );
     expect((await (await route())(post({ sessionId: SESSION }))).status).toBe(202);
+    expect(calls.map(u => u.pathname)).toEqual([`/v1/checkout/sessions/${SESSION}`, '/v1/subscriptions/sub_1']);
+  });
+
+  it('a subscription whose bank debit failed gets a final answer, so the app stops waiting', async () => {
+    const POST = await route();
+    for (const [status, code] of [
+      ['incomplete_expired', 402],
+      ['canceled', 402],
+      ['incomplete', 202],
+      ['past_due', 202],
+    ] as const) {
+      mockStripe(url =>
+        url.pathname === '/v1/subscriptions/sub_1'
+          ? { id: 'sub_1', status, customer: 'cus_1' }
+          : session({ mode: 'subscription', subscription: 'sub_1', payment_status: 'unpaid', payment_intent: null }),
+      );
+      const res = await POST(post({ sessionId: SESSION }));
+      expect([status, res.status]).toEqual([status, code]);
+      if (code === 402) {
+        expect(await res.json()).toMatchObject({ valid: false, reason: expect.stringContaining('did not go through') });
+      }
+    }
+    // Stripe trouble while asking is not an answer.
+    const spy = jest.spyOn(console, 'error').mockImplementation(() => {});
+    mockStripe(url =>
+      url.pathname === '/v1/subscriptions/sub_1'
+        ? { __status: 500, error: { message: 'Stripe is down' } }
+        : session({ mode: 'subscription', subscription: 'sub_1', payment_status: 'unpaid', payment_intent: null }),
+    );
+    expect((await POST(post({ sessionId: SESSION }))).status).toBe(502);
+    spy.mockRestore();
   });
 
   it('a failed or unfinished payment gets a final answer', async () => {

@@ -113,7 +113,7 @@ function PendingPurchase({ pending }: { pending: PendingCheckout }) {
       <p className="text-sm text-fg">
         {overdue
           ? `We have been trying since ${since.toLocaleDateString()}. If the payment did not go through, you can dismiss this and buy again.`
-          : 'Payment received. Pro turns on as soon as Stripe confirms it, usually within a minute. Bank payments can take a few days. The app keeps checking on its own.'}
+          : 'Thank you for your purchase. Pro turns on as soon as Stripe confirms the payment, usually within a minute. Bank payments can take a few days. The app keeps checking on its own.'}
       </p>
       <div className="space-y-2">
         <Button block onClick={retry} disabled={busy}>

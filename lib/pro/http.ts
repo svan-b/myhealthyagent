@@ -102,6 +102,11 @@ export function rateLimited(req: Request, route: string, limit: number): boolean
     hits.delete(k);
   }
   let cur = hits.get(key);
+  if (cur && cur.reset <= now) {
+    // Only when the server clock was set back, which breaks the expiry order. Start a new window.
+    hits.delete(key);
+    cur = undefined;
+  }
   if (!cur) {
     if (hits.size >= MAX_TRACKED) hits.delete(hits.keys().next().value as string);
     cur = { n: 0, reset: now + WINDOW_MS };

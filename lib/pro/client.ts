@@ -45,14 +45,31 @@ export function licenseState(
 type Answer = Record<string, unknown>;
 const text = (v: unknown) => (typeof v === 'string' && v.trim() ? v : undefined);
 
+/**
+ * A request with no answer by then counts as a network failure. Each purchase and key has only one
+ * request running at a time, so without a limit one stalled connection would hold up every retry.
+ */
+export const REQUEST_TIMEOUT_MS = 30_000;
+
 async function request(url: string, body: unknown): Promise<{ ok: boolean; status: number; data: Answer }> {
-  const res = await fetch(url, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(body),
-  });
-  const data = (await res.json().catch(() => null)) as unknown;
-  return { ok: res.ok, status: res.status, data: data && typeof data === 'object' ? (data as Answer) : {} };
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
+  const timedOut = () => new TypeError('The server took too long to answer. Please try again.');
+  try {
+    const res = await fetch(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+      signal: controller.signal,
+    });
+    const data = (await res.json().catch(() => null)) as unknown;
+    if (controller.signal.aborted) throw timedOut();
+    return { ok: res.ok, status: res.status, data: data && typeof data === 'object' ? (data as Answer) : {} };
+  } catch (e) {
+    throw controller.signal.aborted ? timedOut() : e;
+  } finally {
+    clearTimeout(timer);
+  }
 }
 
 async function post<T>(url: string, body: unknown): Promise<T> {
@@ -169,7 +186,9 @@ export function useLicenseRefresh() {
     let lastTry = 0;
     let timer: ReturnType<typeof setTimeout> | undefined;
     const run = async () => {
-      if (stopped || busy) return;
+      // A key the server already answered for can keep its date (an ended key stays at 1970), so this
+      // effect and its listeners can outlive the answer. They must not ask again.
+      if (stopped || busy || answered.current === token) return;
       busy = true;
       clearTimeout(timer);
       lastTry = Date.now();

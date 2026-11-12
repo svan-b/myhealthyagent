@@ -13,6 +13,7 @@ import { resetDBConnection } from '@/lib/db/init';
 import { HealthDataProvider } from '@/lib/hooks/useHealthData';
 import * as pro from '@/lib/pro/client';
 import { LicenseKeyForm, UpgradeCard } from '@/app/components/pro/Upgrade';
+import { announceActivation, supportText } from '@/app/components/pro/activation';
 import { DeleteSection, ProSection } from '@/app/components/settings/SettingsSheet';
 
 jest.mock('@/lib/config', () => ({
@@ -174,6 +175,23 @@ describe('license checks', () => {
     expect(Date.parse((await db.getPreferences()).licenseCheckedAt!)).toBeGreaterThan(0);
   });
 
+  it('does not ask again after a definite answer, even when the device comes back online (F35)', async () => {
+    // A key the server already said has ended keeps its 1970 date when it is told so again.
+    await db.updatePreferences({ licenseToken: OLD_KEY, licenseCheckedAt: EPOCH });
+    respond = () => ({ status: 200, body: { valid: false, reason: 'This subscription has ended.' } });
+    await render(h(Refresh));
+    await waitFor(() => calls.length === 1);
+    await pause(50);
+    for (let i = 0; i < 3; i++) {
+      await act(async () => {
+        window.dispatchEvent(new Event('online'));
+      });
+      await pause(30);
+    }
+    expect(calls).toHaveLength(1);
+    expect((await db.getPreferences()).licenseCheckedAt).toBe(EPOCH);
+  });
+
   it('server errors are not taken as a final answer (F35)', async () => {
     await db.updatePreferences({ licenseToken: OLD_KEY, licenseCheckedAt: '2026-01-01T00:00:00.000Z' });
     respond = () => ({ status: 502, body: { error: 'Something went wrong. Please try again.' } });
@@ -274,6 +292,70 @@ describe('finishing a checkout (F04, F44)', () => {
     expect(calls).toHaveLength(1);
   });
 
+  it('a request that never gets an answer is given up, so the next try can run (F04, F35)', async () => {
+    await pro.savePendingCheckout(SID);
+    // A stalled connection. Fetch only settles when the app gives up on it.
+    let sent = 0;
+    const stalled = (_url: unknown, init?: RequestInit) =>
+      new Promise<Response>((_, reject) => {
+        sent++;
+        init?.signal?.addEventListener('abort', () =>
+          reject(new DOMException('The operation was aborted.', 'AbortError')),
+        );
+      });
+    (global.fetch as jest.Mock).mockImplementationOnce(stalled).mockImplementationOnce(stalled);
+    // Catch the time limit's timer instead of waiting 30 seconds for it.
+    const realSetTimeout = global.setTimeout;
+    const limits: (() => void)[] = [];
+    const spy = jest.spyOn(global, 'setTimeout').mockImplementation(((fn: () => void, ms?: number) => {
+      if (ms === pro.REQUEST_TIMEOUT_MS) {
+        limits.push(fn);
+        return 0 as unknown as ReturnType<typeof setTimeout>;
+      }
+      return realSetTimeout(fn, ms);
+    }) as typeof setTimeout);
+    try {
+      const first = pro.finishCheckout(SID);
+      await waitFor(() => sent === 1 && limits.length === 1, 1000);
+      // Until the limit, everyone shares the stalled request.
+      expect(pro.finishCheckout(SID)).toBe(first);
+      limits[0]();
+      expect(await first).toEqual({ state: 'pending', message: expect.stringContaining('keep trying') });
+      expect((await db.getPreferences()).pendingCheckout?.sessionId).toBe(SID);
+
+      // A license check that stalls is given up the same way.
+      await db.updatePreferences({ licenseToken: OLD_KEY, licenseCheckedAt: '2026-01-01T00:00:00.000Z' });
+      const check = pro.checkLicense(OLD_KEY);
+      await waitFor(() => sent === 2 && limits.length === 2, 1000);
+      limits[1]();
+      expect(await check).toBe('error');
+    } finally {
+      spy.mockRestore();
+    }
+    // The next try sends a new request.
+    respond = () => ({ status: 200, body: { valid: true, token: NEW_KEY } });
+    expect(await pro.finishCheckout(SID)).toEqual({ state: 'active' });
+    expect(sent).toBe(2);
+    expect(calls).toHaveLength(1);
+  });
+
+  it('a made up checkout link cannot put its own words in the support message (F04, F44)', () => {
+    expect(supportText('x. URGENT call +1 555 0100 to cancel')).toBe('If you were charged, email help@example.com.');
+    expect(supportText(SID)).toBe(`If you were charged, email help@example.com and quote reference ${SID}.`);
+    settings.supportEmail = '';
+    expect(supportText(SID, 'If this does not resolve')).toBe(
+      `If this does not resolve, contact support and quote reference ${SID}.`,
+    );
+  });
+
+  it('a payment that is still processing is not announced as received (F04)', () => {
+    const message = 'Your payment is still processing. Pro will turn on automatically when it clears.';
+    announceActivation({ state: 'pending', message }, SID, { showPending: true });
+    const [title, options] = (toast.info as jest.Mock).mock.calls[0] as [string, { description: string }];
+    expect(title).not.toMatch(/payment received/i);
+    expect(options.description).toContain(message);
+  });
+
   it('shows the reason a request failed instead of a status code (F44)', async () => {
     let api!: ReturnType<typeof pro.usePro>;
     function Probe() {
@@ -291,6 +373,8 @@ describe('Pro screens', () => {
     await pro.savePendingCheckout(SID);
     await render(h(UpgradeCard));
     expect(text()).toContain('Finishing your Pro purchase');
+    // A bank payment may still be on its way, so the card does not say the money arrived.
+    expect(text()).not.toMatch(/payment received/i);
     expect(text()).toContain(SID);
     expect(text()).toContain('help@example.com');
     expect(button(/Get Pro/)).toBeUndefined();

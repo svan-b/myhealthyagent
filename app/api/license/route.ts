@@ -54,8 +54,7 @@ async function exchange(sessionId: string) {
     return json({ valid: false, reason: 'That checkout was not completed, so you were not charged.' }, 402);
   }
   if (!isPaid(session)) {
-    const pi = session.payment_intent && typeof session.payment_intent === 'object' ? session.payment_intent : null;
-    if (pi && (pi.status === 'requires_payment_method' || pi.status === 'canceled')) {
+    if (await paymentFailed(session)) {
       return json({ valid: false, reason: 'The payment did not go through, so Pro was not turned on.' }, 402);
     }
     // Bank debits and other delayed methods finish checkout before the money arrives.
@@ -78,6 +77,20 @@ async function exchange(sessionId: string) {
   const problem = await purchaseProblem(session);
   if (problem) return json({ valid: false, reason: problem }, 403);
   return json({ valid: true, token: issueLicense(payload) });
+}
+
+/**
+ * True when a checkout that finished before the money arrived has failed for good. A one time payment
+ * shows it on its PaymentIntent. A subscription's checkout stays unpaid when its first bank debit
+ * fails, so ask Stripe about the subscription. Once it is canceled or expired it can never start.
+ * Anything else may still clear.
+ */
+async function paymentFailed(session: CheckoutSession): Promise<boolean> {
+  const pi = session.payment_intent && typeof session.payment_intent === 'object' ? session.payment_intent : null;
+  if (pi) return pi.status === 'requires_payment_method' || pi.status === 'canceled';
+  if (session.mode !== 'subscription' || !session.subscription) return false;
+  const sub = await stripe<Subscription>('GET', `/subscriptions/${encodeURIComponent(session.subscription)}`);
+  return sub.status === 'canceled' || sub.status === 'incomplete_expired';
 }
 
 async function check(token: unknown) {
