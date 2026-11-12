@@ -6,12 +6,12 @@ People log how they feel and what they ate, drank or did. After about two weeks 
 
 ## What it does
 
-- **Log in seconds.** Pick a symptom, tap how bad it is, save. Foods, drinks, sleep, stress and activities are quick multi-select taps. Anything can be backdated.
+- **Log in seconds.** Pick a symptom, tap how bad it is, save. Foods, drinks, sleep, stress and activities are quick multi-select taps. Anything can be backdated. Logging a symptom again 6 to 24 hours after an entry of it that is still going, or has no duration, asks whether it is the same one, so the diary does not count one long headache as two. Your own symptoms and items can be removed from the quick list, and an item can be moved to another category.
 - **Possible triggers.** For every logged item and symptom, the app compares four delay windows (within 3 hours, 3 to 12 hours, 12 to 24 hours, 1 to 2 days) against the same clock times on days when the item was not logged. Results come with plain numbers ("bloating followed dairy 12 to 24 hours later 10 of 11 times, compared with 0% on nearby days without dairy").
 - **Patterns.** Time of day, weekday versus weekend, symptoms that show up together, and whether things are getting better or worse. Each card appears only when chance is an unlikely explanation.
-- **Medications.** Schedules, a daily checklist with take and skip, as-needed doses, and 30 day adherence. Doses taken also feed the trigger finder so possible side effects can show up.
-- **Doctor report.** A clean multi-page PDF with an overview, symptom table, daily severity chart, possible triggers, medication adherence and the full log.
-- **Your data, your files.** Backup and restore (JSON), spreadsheet export (CSV), and delete everything. Deleting also removes the Pro license key from the device unless the person ticks "Keep my Pro license key on this device".
+- **Medications.** Schedules, a daily checklist with take and skip, as-needed doses, and 30 day adherence. A dose that was not ticked in time can still be recorded, with the time it was really taken, for up to 7 days. Changing a schedule's times keeps the doses already recorded. Doses taken also feed the trigger finder so possible side effects can show up.
+- **Doctor report.** A clean multi-page PDF with an overview, symptom table, daily severity chart, possible triggers, other patterns, medication adherence and the full log. Each section says which dates it is based on. Possible triggers and patterns use the same data as the Insights screen, so a link found before the report's period stays visible and is marked as older. The trigger section also lists what could not be checked, so nothing looks ruled out that was never tested. Names and notes in Latin, Greek and Cyrillic scripts print in an embedded font. Anything the font cannot draw, such as emoji, is printed as a mark and the person is told.
+- **Your data, your files.** Backup and restore (JSON), spreadsheet export (CSV), and delete everything. Restoring adds entries from the file and keeps edits made on this device since the backup. Entries deleted here since the backup come back. Deleting also removes the Pro license key from the device unless the person ticks "Keep my Pro license key on this device".
 - **Works offline** as an installable app (PWA).
 
 ## How trigger finding works
@@ -134,7 +134,7 @@ lib/
   analysis/          Trigger finder, statistics, descriptive patterns, worker
   db/                IndexedDB schema, migrations, data access, backup and CSV
   medication/        Dose schedules and adherence
-  report/            PDF report
+  report/            PDF report, its wording and the embedded font
   pro/               License signing, Stripe client, client side entitlement
 components/ui/       Buttons, chips, fields, sheets
 __tests__/           Unit tests (Jest) and end to end tests (Playwright)
@@ -148,3 +148,7 @@ public/sw.js         Service worker for offline use
 - Backup files are not encrypted.
 - Trigger finding needs both symptoms and the things that might cause them to be logged. It can only find what people log.
 - Data written by browsers in private mode may not survive closing the window.
+
+## Credits
+
+The doctor report embeds subsets of Noto Sans Regular and Bold, which are under the SIL Open Font License 1.1. The license is in [`lib/report/NotoSans-OFL.txt`](lib/report/NotoSans-OFL.txt) and in the fonts themselves.
