@@ -4,7 +4,7 @@ import * as React from 'react';
 import { Lock } from 'lucide-react';
 import { Card, SectionTitle } from '@/components/ui/card';
 import { useHealthData } from '@/lib/hooks/useHealthData';
-import { describeFinding, describeBaseline, type TriggerFinding } from '@/lib/analysis/triggers';
+import { describeFinding, describeBaseline, type TriggerAnalysis, type TriggerFinding } from '@/lib/analysis/triggers';
 import { useTriggerAnalysis } from '@/lib/hooks/useTriggerAnalysis';
 import { dailySeries, getPatterns, getReadiness, summarizeSymptoms, RECOMMENDED_DAYS } from '@/lib/analysis/patterns';
 import { dosesAsFactors } from '@/lib/medication/doses';
@@ -23,8 +23,9 @@ export function InsightsScreen() {
   const { symptoms, factors, doses, loading } = useHealthData();
   const { isPro, enabled: proEnabled } = usePro();
 
-  const allFactors = React.useMemo(() => [...factors, ...dosesAsFactors(doses)], [factors, doses]);
-  const triggers = useTriggerAnalysis(symptoms, allFactors);
+  // Doses are tested for side effects, but a day with only a ticked dose does not count as tracked.
+  const doseFactors = React.useMemo(() => dosesAsFactors(doses), [doses]);
+  const triggers = useTriggerAnalysis(symptoms, factors, doseFactors, !loading);
   const analysis = React.useMemo(() => {
     return {
       readiness: getReadiness(symptoms, factors),
@@ -59,11 +60,14 @@ export function InsightsScreen() {
 
       <SectionTitle>Possible triggers</SectionTitle>
       {shown.length === 0 ? (
-        <Card className="p-5 text-[15px] text-muted">
-          {readiness.stage === 'ready'
-            ? 'Nothing you logged stands out yet. That is a real result: none of your logged foods or activities is clearly followed by more symptoms than usual. Keep logging and this updates automatically.'
-            : 'The app compares how often each symptom starts in the hours and days after things you log against how often it starts at other times. Log symptoms and what you eat or do for a couple of weeks to see results here.'}
-        </Card>
+        readiness.stage === 'ready' ? (
+          <NothingFound triggers={triggers} />
+        ) : (
+          <Card className="p-5 text-[15px] text-muted">
+            The app compares how often each symptom starts in the hours and days after things you log against how often
+            it starts at other times. Log symptoms and what you eat or do for a couple of weeks to see results here.
+          </Card>
+        )
       ) : (
         <div className="space-y-3">
           {shown.map(f => (
@@ -141,30 +145,131 @@ export function InsightsScreen() {
   );
 }
 
+/** Food, drink and activity logs getReadiness wants before it calls trigger finding ready. */
+const READY_FACTOR_LOGS = 10;
+
 function ReadinessCard({ readiness }: { readiness: ReturnType<typeof getReadiness> }) {
-  const pct = Math.min(100, Math.round((readiness.trackedDays / RECOMMENDED_DAYS) * 100));
   if (readiness.stage === 'ready') return null;
+  // Once there are enough days, what is still missing is food, drink and activity logs, so show those.
+  const daysDone = readiness.trackedDays >= RECOMMENDED_DAYS;
+  const goal = daysDone ? READY_FACTOR_LOGS : RECOMMENDED_DAYS;
+  const done = Math.min(goal, daysDone ? readiness.factorCount : readiness.trackedDays);
+  const label = daysDone ? 'food, drink and activity logs' : 'days tracked';
   return (
     <Card className="p-5">
-      <div className="flex items-baseline justify-between">
+      <div className="flex items-baseline justify-between gap-3">
         <p className="font-semibold text-fg">
-          {readiness.trackedDays} of {RECOMMENDED_DAYS} days tracked
+          {done} of {goal} {label}
         </p>
-        <p className="text-sm text-subtle">
-          {readiness.symptomCount} symptoms, {readiness.factorCount} other logs
+        <p className="text-sm text-subtle text-right">
+          {daysDone
+            ? `${readiness.trackedDays} days tracked`
+            : `${readiness.symptomCount} symptoms, ${readiness.factorCount} other logs`}
         </p>
       </div>
       <div
         className="mt-3 h-2 rounded-full bg-surface-2 overflow-hidden"
         role="progressbar"
         aria-valuemin={0}
-        aria-valuemax={RECOMMENDED_DAYS}
-        aria-valuenow={readiness.trackedDays}
-        aria-label="Days tracked"
+        aria-valuemax={goal}
+        aria-valuenow={done}
+        aria-label={daysDone ? 'Food, drink and activity logs' : 'Days tracked'}
       >
-        <div className="h-full rounded-full bg-accent transition-all" style={{ width: `${pct}%` }} />
+        <div
+          className="h-full rounded-full bg-accent transition-all"
+          style={{ width: `${Math.round((done / goal) * 100)}%` }}
+        />
       </div>
       <p className="text-sm text-muted mt-3">{readiness.message}</p>
+    </Card>
+  );
+}
+
+/** "Dairy", "Dairy and gluten", "Dairy, gluten and wine", or "Dairy, gluten, wine and 2 more". */
+function nameList(names: string[]): string {
+  if (names.length > 4) return `${names.slice(0, 3).join(', ')} and ${names.length - 3} more`;
+  if (names.length < 2) return names.join('');
+  return `${names.slice(0, -1).join(', ')} and ${names[names.length - 1]}`;
+}
+
+/**
+ * What the trigger finder could not check, in plain sentences, so that finding nothing is never read as
+ * "ruled out" for things that were not compared at all.
+ */
+function notCheckedNotes(t: TriggerAnalysis): string[] {
+  const notes: string[] = [];
+  const add = (names: string[], one: string, many: string) => {
+    if (names.length) notes.push(`${nameList(names)} ${names.length === 1 ? one : many}`);
+  };
+  const skipped = (...reasons: string[]) => t.factorsSkipped.filter(f => reasons.includes(f.reason)).map(f => f.name);
+  add(
+    skipped('daily', 'same-time'),
+    'is logged every day or at the same time each day, so it cannot be told apart from your daily routine.',
+    'are logged every day or at the same time each day, so they cannot be told apart from your daily routine.',
+  );
+  add(
+    skipped('few'),
+    'needs at least 3 logs before it can be checked.',
+    'need at least 3 logs before they can be checked.',
+  );
+  if (t.symptomsEligible > 0) {
+    add(
+      skipped('no-symptom'),
+      'was always logged at about the same time as a symptom, so it is not clear which came first.',
+      'were always logged at about the same time as a symptom, so it is not clear which came first.',
+    );
+  }
+  add(
+    t.symptomsSkipped.filter(s => s.reason === 'few').map(s => s.name),
+    'needs to be logged on at least 3 separate occasions before it can be checked.',
+    'need to be logged on at least 3 separate occasions before they can be checked.',
+  );
+  // The analysis looks at the last six months.
+  if (!t.symptomsTested.length && !t.symptomsSkipped.length) {
+    notes.push('No symptoms are logged in the last six months. Log a symptom each time it starts.');
+  }
+  if (!t.factorsTested.length && !t.factorsSkipped.length) {
+    notes.push('Nothing you ate, drank or did is logged in the last six months. Log those too.');
+  }
+  return notes;
+}
+
+/** Shown when trigger finding is ready but nothing stands out. Says what was and was not checked. */
+function NothingFound({ triggers }: { triggers: TriggerAnalysis }) {
+  const notes = notCheckedNotes(triggers);
+  const checked = triggers.factorsTested.length;
+  if (!triggers.testsRun) {
+    return (
+      <Card className="p-5 text-[15px] text-muted">
+        <p>Nothing could be checked yet, so nothing is ruled out.</p>
+        {notes.length > 0 && (
+          <ul className="mt-2 space-y-1">
+            {notes.map(n => (
+              <li key={n}>{n}</li>
+            ))}
+          </ul>
+        )}
+      </Card>
+    );
+  }
+  return (
+    <Card className="p-5 text-[15px] text-muted">
+      <p>
+        {checked === 1
+          ? `Nothing you logged stands out yet. ${triggers.factorsTested[0]} could be checked, and it is not clearly followed by more symptoms than usual.`
+          : `Nothing you logged stands out yet. None of the ${checked} items that could be checked is clearly followed by more symptoms than usual.`}{' '}
+        That is a real result. Keep logging and this updates automatically.
+      </p>
+      {notes.length > 0 && (
+        <>
+          <p className="mt-3 text-sm font-semibold text-fg">Not checked yet, so not ruled out</p>
+          <ul className="mt-1 space-y-1 text-sm">
+            {notes.map(n => (
+              <li key={n}>{n}</li>
+            ))}
+          </ul>
+        </>
+      )}
     </Card>
   );
 }

@@ -53,6 +53,32 @@ export function poissonBinomialUpperTail(probs: number[], k: number): number {
   return Math.min(1, Math.max(0, dist[k]));
 }
 
+/**
+ * P(X >= k) where X is a sum of independent counts that can each be more than 1. dists[i][j] is the
+ * chance that count i equals j. With only 0 or 1 counts this is the Poisson binomial above. Exact
+ * dynamic programming, O(n * k * size), with k as an absorbing state.
+ */
+export function clusteredUpperTail(dists: ArrayLike<number>[], k: number): number {
+  if (k <= 0) return 1;
+  let cur = new Float64Array(k + 1);
+  let next = new Float64Array(k + 1);
+  cur[0] = 1;
+  for (const d of dists) {
+    next.fill(0);
+    next[k] = cur[k];
+    for (let j = 0; j < k; j++) {
+      const pj = cur[j];
+      if (pj === 0) continue;
+      for (let c = 0; c < d.length; c++) {
+        const q = d[c];
+        if (q > 0) next[Math.min(k, j + c)] += pj * q;
+      }
+    }
+    [cur, next] = [next, cur];
+  }
+  return Math.min(1, Math.max(0, cur[k]));
+}
+
 /** Benjamini–Hochberg adjusted p values (q values), same order as input. */
 export function benjaminiHochberg(pValues: number[]): number[] {
   const m = pValues.length;
