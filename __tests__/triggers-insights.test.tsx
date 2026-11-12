@@ -102,6 +102,28 @@ describe('when nothing stands out', () => {
     expect(text).toContain('Pizza needs at least 3 logs before it can be checked.');
     expect(text).toContain('Migraine needs to be logged on at least 3 separate occasions before it can be checked.');
   });
+
+  it('names a symptom that was never compared with the items that were', async () => {
+    // Stress is logged on and off at varied times, and headache only ever within minutes of it, so which
+    // came first is unknown and headache is never compared with anything. Stress is still checked
+    // against bloating, which comes on other days.
+    const symptoms: Symptom[] = [];
+    const factors: Factor[] = [];
+    for (let d = 30; d >= 1; d--) {
+      factors.push(fac('Coffee', at(d, 8), 'drink'));
+      factors.push(fac(`Dinner ${d}`, at(d, 19)));
+      if (d % 3 === 0) factors.push(fac('Stress', at(d, 10 + (d % 7)), 'stress'));
+      if (d % 6 === 0) symptoms.push(sym('Headache', at(d, 10 + (d % 7)) + 5 * 60_000));
+      if (d % 5 === 1) symptoms.push(sym('Bloating', at(d, 9 + (d % 8))));
+    }
+
+    const text = await show({ symptoms, factors });
+    expect(text).toContain('Stress could be checked, and it is not clearly followed by more symptoms than usual.');
+    expect(text).toContain('Not checked yet, so not ruled out');
+    expect(text).toContain(
+      'Headache was logged at about the same time as the items that could be checked, so it is not clear which came first.',
+    );
+  });
 });
 
 describe('readiness card', () => {

@@ -351,7 +351,7 @@ export function findTriggers(symptoms: Symptom[], factors: Factor[], options: Tr
   const slotOf = new Uint8Array(nBins);
   const dayNumber = new Map<string, number>();
   let activeCount = 0;
-  // Local hour and tracked day only change on the hour, so compute them once per hour of bins.
+  // Local hour and tracked day change on the hour, so compute them once per hour of bins.
   for (let i = 0; i < nBins;) {
     const d = new Date((firstBin + i) * BIN);
     const hour = d.getHours();
@@ -362,7 +362,12 @@ export function findTriggers(symptoms: Symptom[], factors: Factor[], options: Tr
     // Bins until the next local hour. Zone offsets are multiples of 15 minutes, so local hour
     // boundaries always fall on bin edges, including in zones offset by 30 or 45 minutes.
     const binsToNextHour = Math.max(1, Math.round((60 - d.getMinutes()) / 15));
-    const end = Math.min(nBins, i + binsToNextHour);
+    let end = Math.min(nBins, i + binsToNextHour);
+    // Clocks nearly always change on the hour, but on the Chatham Islands they change at 2:45. When the
+    // offset changes inside this hour, go one bin at a time so each bin gets its own clock time.
+    if (end - i > 1 && new Date((firstBin + end - 1) * BIN).getTimezoneOffset() !== d.getTimezoneOffset()) {
+      end = i + 1;
+    }
     for (let slot = hour * BINS_PER_HOUR + Math.floor(d.getMinutes() / 15); i < end; i++, slot++) {
       hourOf[i] = hour;
       if (isActive) {
@@ -380,12 +385,10 @@ export function findTriggers(symptoms: Symptom[], factors: Factor[], options: Tr
   const activePrefix = prefixSum(active);
 
   // Which clock slots each tracked day has. The first and last tracked days are cut short by the first
-  // log and by now, and clock changes skip or repeat an hour. When an hour repeats, its first pass is
-  // the one used for that clock time.
+  // log and by now, and clock changes skip or repeat an hour.
   const nTracked = dayNumber.size;
   // Day sets are bit sets with one bit per tracked day, dayWords words long.
   const dayWords = (nTracked + 31) >> 5;
-  const slotBin = new Uint8Array(nBins);
   const validBySlot = new Int32Array(BINS_PER_DAY);
   const validDays = new Int32Array(BINS_PER_DAY * dayWords);
   for (let i = 0; i < nBins; i++) {
@@ -396,7 +399,6 @@ export function findTriggers(symptoms: Symptom[], factors: Factor[], options: Tr
     const bit = 1 << (day & 31);
     if (validDays[at] & bit) continue;
     validDays[at] |= bit;
-    slotBin[i] = 1;
     validBySlot[c]++;
   }
 
@@ -495,11 +497,14 @@ export function findTriggers(symptoms: Symptom[], factors: Factor[], options: Tr
         if (!covered[i] || !active[i]) continue;
         exposedByHour[hourOf[i]]++;
         exposedActive++;
-        if (slotBin[i]) {
-          const c = slotOf[i];
-          coveredBySlot[c]++;
-          coveredDays[c * dayWords + (dayOf[i] >> 5)] |= 1 << (dayOf[i] & 31);
-        }
+        // When clocks go back, a clock time on that day counts as exposed if either pass of it was. So a
+        // start in the repeated hour is never more exposed than its own day allows under "no effect".
+        const c = slotOf[i];
+        const at = c * dayWords + (dayOf[i] >> 5);
+        const bit = 1 << (dayOf[i] & 31);
+        if (coveredDays[at] & bit) continue;
+        coveredDays[at] |= bit;
+        coveredBySlot[c]++;
       }
       if (exposedActive < 6 * BINS_PER_HOUR) {
         skip('few');

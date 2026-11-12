@@ -44,7 +44,9 @@ function planted() {
     factors.push({ id: `f${seq++}`, name: 'Coffee', category: 'drink', timestamp: new Date(at(d, 8)).toISOString() });
     if (d % 3 === 0) {
       factors.push({ id: `f${seq++}`, name: 'Dairy', category: 'food', timestamp: new Date(at(d, 12)).toISOString() });
-      symptoms.push({ id: `s${seq++}`, name: 'Headache', severity: 6, timestamp: new Date(at(d, 27)).toISOString() });
+      // 15 hours after the dairy, counted in real time, so a clock change in between does not move it.
+      const headache = new Date(at(d, 12) + 15 * HOUR).toISOString();
+      symptoms.push({ id: `s${seq++}`, name: 'Headache', severity: 6, timestamp: headache });
     }
     if (d % 7 === 0) {
       symptoms.push({ id: `s${seq++}`, name: 'Headache', severity: 4, timestamp: new Date(at(d, 10)).toISOString() });

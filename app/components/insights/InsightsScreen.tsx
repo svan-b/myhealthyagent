@@ -224,6 +224,15 @@ function notCheckedNotes(t: TriggerAnalysis): string[] {
     'needs to be logged on at least 3 separate occasions before it can be checked.',
     'need to be logged on at least 3 separate occasions before they can be checked.',
   );
+  // When some items could be checked, a symptom none of them was compared with was logged at about the
+  // same time as each of them.
+  if (t.testsRun > 0) {
+    add(
+      t.symptomsSkipped.filter(s => s.reason === 'no-factor').map(s => s.name),
+      'was logged at about the same time as the items that could be checked, so it is not clear which came first.',
+      'were logged at about the same time as the items that could be checked, so it is not clear which came first.',
+    );
+  }
   // The analysis looks at the last six months.
   if (!t.symptomsTested.length && !t.symptomsSkipped.length) {
     notes.push('No symptoms are logged in the last six months. Log a symptom each time it starts.');
