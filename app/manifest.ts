@@ -9,7 +9,7 @@ export default function manifest(): MetadataRoute.Manifest {
     start_url: '/',
     scope: '/',
     display: 'standalone',
-    orientation: 'portrait',
+    // No orientation lock, so the installed app turns with the device, including on a mount fixed in landscape.
     background_color: '#f5f7f9',
     theme_color: '#0e7490',
     categories: ['health', 'medical', 'lifestyle'],

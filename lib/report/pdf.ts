@@ -337,3 +337,6 @@ export async function buildReport(input: ReportInput): Promise<Blob> {
 
   return doc.output('blob');
 }
+
+/** Loads the PDF libraries without making a report, so the service worker can cache them for offline use. */
+export const preloadReportLibs = () => Promise.all([import('jspdf'), import('jspdf-autotable')]);

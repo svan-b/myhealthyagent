@@ -3,56 +3,105 @@
 import { useEffect } from 'react';
 import { toast } from 'sonner';
 
+type Container = Pick<ServiceWorkerContainer, 'controller' | 'addEventListener' | 'removeEventListener'>;
+
+/**
+ * Reloads the page once when a new version of the service worker takes over, so the page never keeps running
+ * the old build under the new worker. The very first install also takes control of a page that started
+ * without a worker. That is not an update and needs no reload.
+ */
+export function reloadOnUpdate(sw: Container, reload: () => void) {
+  // True once a worker controlled this page or was already active when it loaded. From then on, any takeover
+  // is a new version, even on a page that started without a worker after a hard reload.
+  let hadWorker = Boolean(sw.controller);
+  let reloading = false;
+  const onChange = () => {
+    const update = hadWorker;
+    hadWorker = true;
+    if (!update || !sw.controller || reloading) return;
+    reloading = true;
+    reload();
+  };
+  sw.addEventListener('controllerchange', onChange);
+  return {
+    /** Call with the registration. A worker that is already active means later takeovers are updates. */
+    registered(reg: Pick<ServiceWorkerRegistration, 'active'>) {
+      if (reg.active) hadWorker = true;
+    },
+    /** Whether a worker ran before, so a waiting one is an update the person can accept. */
+    hadWorker: () => hadWorker,
+    stop: () => sw.removeEventListener('controllerchange', onChange),
+  };
+}
+
+/** Asks the service worker to cache every build file this page has loaded, so the app also starts offline. */
+export async function warmCache() {
+  const urls = performance
+    .getEntriesByType('resource')
+    .map(e => e.name)
+    .filter(u => u.startsWith(location.origin) && u.includes('/_next/static/'));
+  const reg = await navigator.serviceWorker.ready;
+  reg.active?.postMessage({ type: 'CACHE_URLS', urls: [location.origin + '/', ...urls] });
+}
+
+/**
+ * Loads code that otherwise only loads when a feature is used, once the service worker runs and the app is
+ * idle, then has the worker cache it. Without this, such a feature fails offline until it was used online.
+ */
+export async function preloadForOffline(load: () => Promise<unknown>) {
+  if (!('serviceWorker' in navigator) || process.env.NODE_ENV !== 'production') return;
+  await navigator.serviceWorker.ready;
+  await new Promise<void>(resolve => {
+    // Not every browser has requestIdleCallback.
+    if ('requestIdleCallback' in window) window.requestIdleCallback(() => resolve(), { timeout: 10_000 });
+    else setTimeout(resolve, 3000);
+  });
+  await load();
+  // The page may not be controlled yet on a first visit, so its own requests may not have reached the worker.
+  await warmCache();
+}
+
 export default function ServiceWorkerProvider() {
   useEffect(() => {
     if (!('serviceWorker' in navigator) || process.env.NODE_ENV !== 'production') return;
 
-    let refreshing = false;
-    const hadController = Boolean(navigator.serviceWorker.controller);
-    navigator.serviceWorker.addEventListener('controllerchange', () => {
-      // Only reload for updates, not for the very first install.
-      if (!hadController || refreshing) return;
-      refreshing = true;
-      window.location.reload();
-    });
-
-    const promptUpdate = (reg: ServiceWorkerRegistration) => {
-      if (!reg.waiting || !navigator.serviceWorker.controller) return;
+    const updates = reloadOnUpdate(navigator.serviceWorker, () => window.location.reload());
+    let reg: ServiceWorkerRegistration | null = null;
+    const promptUpdate = () => {
+      if (!reg?.waiting || !updates.hadWorker()) return;
       toast('A new version is ready', {
+        id: 'sw-update',
         duration: Infinity,
-        action: { label: 'Update', onClick: () => reg.waiting?.postMessage('SKIP_WAITING') },
+        action: { label: 'Update', onClick: () => reg?.waiting?.postMessage('SKIP_WAITING') },
       });
     };
+    // Check for updates when the app comes back to the foreground.
+    const onVisible = () => {
+      if (document.visibilityState === 'visible') reg?.update().catch(() => {});
+    };
+    document.addEventListener('visibilitychange', onVisible);
 
     navigator.serviceWorker
       .register('/sw.js')
-      .then(reg => {
-        promptUpdate(reg);
-        reg.addEventListener('updatefound', () => {
-          const sw = reg.installing;
+      .then(r => {
+        reg = r;
+        updates.registered(r);
+        promptUpdate();
+        r.addEventListener('updatefound', () => {
+          const sw = r.installing;
           sw?.addEventListener('statechange', () => {
-            if (sw.state === 'installed') promptUpdate(reg);
+            if (sw.state === 'installed') promptUpdate();
           });
         });
-        // Warm the cache with what this page already loaded, so the app works offline after the first visit.
-        const warm = () => {
-          const urls = performance
-            .getEntriesByType('resource')
-            .map(e => e.name)
-            .filter(u => u.startsWith(location.origin) && u.includes('/_next/static/'));
-          (reg.active ?? navigator.serviceWorker.controller)?.postMessage({
-            type: 'CACHE_URLS',
-            urls: [location.origin + '/', ...urls],
-          });
-        };
-        if (reg.active) warm();
-        else navigator.serviceWorker.ready.then(warm);
-        // Check for updates when the app comes back to the foreground.
-        document.addEventListener('visibilitychange', () => {
-          if (document.visibilityState === 'visible') reg.update().catch(() => {});
-        });
+        // Cache what this page already loaded, so the app works offline after the first visit.
+        return warmCache();
       })
       .catch(() => {});
+
+    return () => {
+      updates.stop();
+      document.removeEventListener('visibilitychange', onVisible);
+    };
   }, []);
   return null;
 }
