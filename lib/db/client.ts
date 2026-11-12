@@ -1,242 +1,333 @@
 // lib/db/client.ts
-import { initDB } from "./init";
-import type { Symptom, UserPreferences, MedLog, MedicationSchedule, MedicationAdherence } from "./schema";
+import { initDB, STORES } from './init';
+import {
+  DEFAULT_PREFERENCES,
+  type Factor,
+  type MedicationAdherence,
+  type MedicationSchedule,
+  type Symptom,
+  type UserPreferences,
+} from './schema';
+
+export const MAX_NAME_LENGTH = 60;
+export const MAX_NOTE_LENGTH = 1000;
+
+export function cleanName(name: string): string {
+  return name.replace(/\s+/g, ' ').trim().slice(0, MAX_NAME_LENGTH);
+}
+
+function cleanNote(note?: string): string | undefined {
+  const n = note?.trim().slice(0, MAX_NOTE_LENGTH);
+  return n ? n : undefined;
+}
+
+function assertValidTime(iso: string) {
+  const t = Date.parse(iso);
+  if (Number.isNaN(t)) throw new Error('Invalid date');
+  // Allow small clock skew, but not entries far in the future.
+  if (t > Date.now() + 5 * 60_000) throw new Error('That time is in the future');
+}
+
+function normalizeSymptom(s: Symptom): Symptom {
+  const name = cleanName(s.name);
+  if (!name) throw new Error('Symptom name is required');
+  assertValidTime(s.timestamp);
+  const severity = Math.round(Math.min(10, Math.max(1, Number(s.severity) || 1)));
+  const duration =
+    s.duration_minutes != null && Number.isFinite(s.duration_minutes) && s.duration_minutes > 0
+      ? Math.round(s.duration_minutes)
+      : undefined;
+  return {
+    ...s,
+    name,
+    severity,
+    timestamp: new Date(s.timestamp).toISOString(),
+    duration_minutes: s.ongoing ? undefined : duration,
+    notes: cleanNote(s.notes),
+  };
+}
+
+function normalizeFactor(f: Factor): Factor {
+  const name = cleanName(f.name);
+  if (!name) throw new Error('Name is required');
+  assertValidTime(f.timestamp);
+  return { ...f, name, timestamp: new Date(f.timestamp).toISOString(), notes: cleanNote(f.notes) };
+}
+
+/** Accepts preferences saved by any earlier version and fills gaps. */
+export function normalizePreferences(raw: unknown): UserPreferences {
+  const p = (raw && typeof raw === 'object' ? raw : {}) as Record<string, unknown>;
+  const strings = (v: unknown) => (Array.isArray(v) ? v.filter((x): x is string => typeof x === 'string') : []);
+  const customFactors = Array.isArray(p.customFactors)
+    ? (p.customFactors as UserPreferences['customFactors']).filter(f => f && typeof f.name === 'string')
+    : [];
+  return {
+    ...DEFAULT_PREFERENCES,
+    customSymptoms: strings(p.customSymptoms),
+    customFactors,
+    streakCount: typeof p.streakCount === 'number' ? p.streakCount : 0,
+    lastLogDate: typeof p.lastLogDate === 'string' ? p.lastLogDate : undefined,
+    onboardedAt: typeof p.onboardedAt === 'string' ? p.onboardedAt : undefined,
+    lastBackupAt: typeof p.lastBackupAt === 'string' ? p.lastBackupAt : undefined,
+    reportName: typeof p.reportName === 'string' ? p.reportName : undefined,
+    licenseToken: typeof p.licenseToken === 'string' ? p.licenseToken : undefined,
+    licenseCheckedAt: typeof p.licenseCheckedAt === 'string' ? p.licenseCheckedAt : undefined,
+  };
+}
+
+const byTimeDesc = <T extends { timestamp: string }>(a: T, b: T) => b.timestamp.localeCompare(a.timestamp);
+
+/** Subscribers are told when data changes so open screens can refresh. */
+type Listener = () => void;
+const listeners = new Set<Listener>();
+let channel: BroadcastChannel | null = null;
+function getChannel() {
+  if (!channel && typeof BroadcastChannel !== 'undefined') {
+    channel = new BroadcastChannel('mha-data');
+    channel.onmessage = () => listeners.forEach(l => l());
+  }
+  return channel;
+}
+let notifyScheduled = false;
+/** Tells open screens (and other tabs) that data changed. Bursts of writes are coalesced into one refresh. */
+function notify() {
+  if (notifyScheduled) return;
+  notifyScheduled = true;
+  setTimeout(() => {
+    notifyScheduled = false;
+    listeners.forEach(l => l());
+    getChannel()?.postMessage('changed');
+  }, 0);
+}
+export function subscribe(listener: Listener): () => void {
+  getChannel();
+  listeners.add(listener);
+  return () => listeners.delete(listener);
+}
 
 export const db = {
-  // Symptom operations
-  async addSymptom(symptom: Symptom): Promise<void> {
+  // ----- Symptoms -----
+  async addSymptom(symptom: Symptom): Promise<Symptom> {
+    const clean = normalizeSymptom(symptom);
     const idb = await initDB();
-    await idb.add("symptoms", symptom);
+    await idb.put('symptoms', clean);
+    await this.recordActivity();
+    notify();
+    return clean;
   },
 
-  async getAllSymptoms(): Promise<Symptom[]> {
+  async updateSymptom(symptom: Symptom): Promise<void> {
     const idb = await initDB();
-    const rows = await idb.getAll("symptoms");
-    return rows as Symptom[];
+    await idb.put('symptoms', { ...normalizeSymptom(symptom), updatedAt: new Date().toISOString() });
+    notify();
   },
 
   async deleteSymptom(id: string): Promise<void> {
     const idb = await initDB();
-    await idb.delete("symptoms", id);
+    await idb.delete('symptoms', id);
+    notify();
   },
 
-  async updateSymptom(id: string, symptom: Symptom): Promise<void> {
+  async restoreSymptom(symptom: Symptom): Promise<void> {
     const idb = await initDB();
-    await idb.put("symptoms", symptom);
+    await idb.put('symptoms', symptom);
+    notify();
   },
 
-  async getYesterdaysSymptoms(): Promise<Symptom[]> {
-    const symptoms = await this.getAllSymptoms();
-    const yesterday = new Date();
-    yesterday.setDate(yesterday.getDate() - 1);
-    const yesterdayStr = yesterday.toDateString();
-    return symptoms.filter(s =>
-      new Date(s.timestamp).toDateString() === yesterdayStr
-    );
-  },
-
-  // Preferences operations
-  async getPreferences(): Promise<UserPreferences | undefined> {
+  async getAllSymptoms(): Promise<Symptom[]> {
     const idb = await initDB();
-    return await idb.get("preferences", "user-preferences");
+    const rows = (await idb.getAll('symptoms')) as Symptom[];
+    return rows.sort(byTimeDesc);
   },
 
-  async savePreferences(prefs: UserPreferences): Promise<void> {
+  // ----- Factors (food, drink, activity, sleep, stress, medication, other) -----
+  async addFactors(factors: Factor[]): Promise<void> {
+    const clean = factors.map(normalizeFactor);
     const idb = await initDB();
-    await idb.put("preferences", { ...prefs, id: "user-preferences" });
+    const tx = idb.transaction('factors', 'readwrite');
+    await Promise.all([...clean.map(f => tx.store.put(f)), tx.done]);
+    await this.recordActivity();
+    notify();
   },
 
-  async updateStreak(): Promise<number> {
-    const prefs = await this.getPreferences() || {
-      id: "user-preferences",
-      favoriteSymptoms: [],
-      recentSymptoms: [],
-      defaultSeverity: 4,
-      streakCount: 0,
-      lastLogDate: undefined
-    };
+  async updateFactor(factor: Factor): Promise<void> {
+    const idb = await initDB();
+    await idb.put('factors', { ...normalizeFactor(factor), updatedAt: new Date().toISOString() });
+    notify();
+  },
 
-    const today = new Date().toDateString();
-    const yesterday = new Date();
-    yesterday.setDate(yesterday.getDate() - 1);
-    const yesterdayStr = yesterday.toDateString();
+  async deleteFactor(id: string): Promise<void> {
+    const idb = await initDB();
+    await idb.delete('factors', id);
+    notify();
+  },
 
-    let newStreak = prefs.streakCount;
+  async restoreFactor(factor: Factor): Promise<void> {
+    const idb = await initDB();
+    await idb.put('factors', factor);
+    notify();
+  },
+
+  async getAllFactors(): Promise<Factor[]> {
+    const idb = await initDB();
+    const rows = (await idb.getAll('factors')) as Factor[];
+    return rows.sort(byTimeDesc);
+  },
+
+  // ----- Preferences -----
+  async getPreferences(): Promise<UserPreferences> {
+    const idb = await initDB();
+    return normalizePreferences(await idb.get('preferences', 'user-preferences'));
+  },
+
+  async updatePreferences(patch: Partial<UserPreferences>): Promise<UserPreferences> {
+    const idb = await initDB();
+    const tx = idb.transaction('preferences', 'readwrite');
+    const current = normalizePreferences(await tx.store.get('user-preferences'));
+    const next: UserPreferences = { ...current, ...patch, id: 'user-preferences' };
+    await tx.store.put(next);
+    await tx.done;
+    notify();
+    return next;
+  },
+
+  /** Updates the daily streak. Called after anything is logged. */
+  async recordActivity(now = new Date()): Promise<number> {
+    const prefs = await this.getPreferences();
+    const today = now.toDateString();
+    const y = new Date(now);
+    y.setDate(y.getDate() - 1);
+    let streak = prefs.streakCount;
     if (prefs.lastLogDate === today) {
-      // Already logged today, no change
-    } else if (prefs.lastLogDate === yesterdayStr) {
-      // Continuing streak
-      newStreak = prefs.streakCount + 1;
+      streak = Math.max(streak, 1);
+    } else if (prefs.lastLogDate === y.toDateString()) {
+      streak += 1;
     } else {
-      // Streak broken or first log
-      newStreak = 1;
+      streak = 1;
     }
-
-    await this.savePreferences({
-      ...prefs,
-      streakCount: newStreak,
-      lastLogDate: today
-    });
-
-    return newStreak;
+    await this.updatePreferences({ streakCount: streak, lastLogDate: today });
+    return streak;
   },
 
-  // Medication operations
-  async addMed(med: MedLog): Promise<void> {
-    const idb = await initDB();
-    await idb.add("meds", med);
+  /** Streak to display. Shows 0 if the person missed yesterday and has not logged today. */
+  currentStreak(prefs: UserPreferences, now = new Date()): number {
+    const y = new Date(now);
+    y.setDate(y.getDate() - 1);
+    if (prefs.lastLogDate === now.toDateString() || prefs.lastLogDate === y.toDateString()) {
+      return prefs.streakCount;
+    }
+    return 0;
   },
 
-  async getAllMeds(): Promise<MedLog[]> {
-    const idb = await initDB();
-    const rows = await idb.getAll("meds");
-    return rows as MedLog[];
+  async rememberCustomSymptom(name: string): Promise<void> {
+    const prefs = await this.getPreferences();
+    const clean = cleanName(name);
+    const list = [clean, ...prefs.customSymptoms.filter(s => s.toLowerCase() !== clean.toLowerCase())].slice(0, 20);
+    await this.updatePreferences({ customSymptoms: list });
   },
 
-  async getMedsInRange(startDate: Date, endDate: Date): Promise<MedLog[]> {
-    const meds = await this.getAllMeds();
-    return meds.filter(m => {
-      const medDate = new Date(m.timestamp);
-      return medDate >= startDate && medDate <= endDate;
-    });
+  async rememberCustomFactor(name: string, category: Factor['category']): Promise<void> {
+    const prefs = await this.getPreferences();
+    const clean = cleanName(name);
+    const list = [
+      { name: clean, category },
+      ...prefs.customFactors.filter(f => f.name.toLowerCase() !== clean.toLowerCase()),
+    ].slice(0, 30);
+    await this.updatePreferences({ customFactors: list });
   },
 
-  async deleteMed(id: string): Promise<void> {
-    const idb = await initDB();
-    await idb.delete("meds", id);
-  },
-
-  async updateMed(id: string, med: MedLog): Promise<void> {
-    const idb = await initDB();
-    await idb.put("meds", med);
-  },
-
-  async getRecentMeds(hours: number = 24): Promise<MedLog[]> {
-    const meds = await this.getAllMeds();
-    const cutoff = new Date(Date.now() - hours * 60 * 60 * 1000);
-    return meds.filter(m => new Date(m.timestamp) >= cutoff);
-  },
-
-  // ===== MEDICATION SCHEDULES =====
-  async getMedicationSchedules(): Promise<MedicationSchedule[]> {
-    const idb = await initDB();
-    const schedules = await idb.getAll("schedules");
-    return schedules.filter(s => s.isActive);
-  },
-
+  // ----- Medication schedules -----
   async getAllMedicationSchedules(): Promise<MedicationSchedule[]> {
     const idb = await initDB();
-    return idb.getAll("schedules");
+    const rows = (await idb.getAll('schedules')) as MedicationSchedule[];
+    return rows.sort((a, b) => a.medicationName.localeCompare(b.medicationName));
   },
 
   async saveMedicationSchedule(schedule: MedicationSchedule): Promise<void> {
+    const name = cleanName(schedule.medicationName);
+    if (!name) throw new Error('Medication name is required');
+    const times = Array.from(new Set(schedule.scheduleTimes.filter(t => /^\d{2}:\d{2}$/.test(t)))).sort();
     const idb = await initDB();
-    await idb.put("schedules", schedule);
+    await idb.put('schedules', {
+      ...schedule,
+      medicationName: name,
+      dosage: schedule.dosage.trim().slice(0, MAX_NAME_LENGTH),
+      notes: cleanNote(schedule.notes),
+      scheduleTimes: schedule.frequency === 'as-needed' ? [] : times,
+    });
+    notify();
   },
 
   async deleteMedicationSchedule(id: string): Promise<void> {
     const idb = await initDB();
-    await idb.delete("schedules", id);
-  },
-
-  // ===== MEDICATION ADHERENCE =====
-  async logAdherence(adherence: MedicationAdherence): Promise<void> {
-    const idb = await initDB();
-    await idb.put("adherence", adherence);
-  },
-
-  async getAdherenceBySchedule(scheduleId: string, days: number = 30): Promise<MedicationAdherence[]> {
-    const idb = await initDB();
-    const cutoff = new Date();
-    cutoff.setDate(cutoff.getDate() - days);
-    
-    const all = await idb.getAll("adherence");
-    return all.filter(r => 
-      r.scheduleId === scheduleId && 
-      new Date(r.scheduledTime) >= cutoff
-    );
-  },
-
-  async getTodaysDueMedications(): Promise<{schedule: MedicationSchedule, adherence?: MedicationAdherence}[]> {
-    const schedules = await this.getMedicationSchedules();
-    const today = new Date();
-    const todayStr = today.toISOString().split('T')[0];
-    
-    const result = [];
-    for (const schedule of schedules) {
-      for (const time of schedule.scheduleTimes) {
-        const scheduledTime = `${todayStr}T${time}:00`;
-        const adherence = await this.getAdherenceForTime(schedule.id, scheduledTime);
-        
-        if (!adherence || adherence.status === 'pending') {
-          result.push({ schedule, adherence });
-        }
-      }
+    const tx = idb.transaction(['schedules', 'adherence'], 'readwrite');
+    await tx.objectStore('schedules').delete(id);
+    let cursor = await tx.objectStore('adherence').index('scheduleId').openCursor(id);
+    while (cursor) {
+      await cursor.delete();
+      cursor = await cursor.continue();
     }
-    return result;
+    await tx.done;
+    notify();
   },
 
-  async getAdherenceForTime(scheduleId: string, scheduledTime: string): Promise<MedicationAdherence | undefined> {
+  // ----- Dose records -----
+  async getAllDoses(): Promise<MedicationAdherence[]> {
     const idb = await initDB();
-    const all = await idb.getAll("adherence");
-    return all.find(a => 
-      a.scheduleId === scheduleId && 
-      a.scheduledTime === scheduledTime
-    );
+    return (await idb.getAll('adherence')) as MedicationAdherence[];
   },
 
-  async updateAdherence(id: string, adherence: MedicationAdherence): Promise<void> {
+  async saveDose(dose: MedicationAdherence): Promise<void> {
     const idb = await initDB();
-    await idb.put("adherence", adherence);
+    await idb.put('adherence', dose);
+    if (dose.status === 'taken') await this.recordActivity();
+    notify();
   },
 
-  // Export helpers
-  async exportJSON(): Promise<string> {
-    const symptoms = await this.getAllSymptoms();
-    const meds = await this.getAllMeds();
-    const schedules = await this.getAllMedicationSchedules();
-    const adherence = await this.getAllAdherence();
-    const prefs = await this.getPreferences();
-    return JSON.stringify({ 
-      symptoms, 
-      meds, 
-      schedules,
-      adherence,
-      preferences: prefs 
-    }, null, 2);
-  },
-
-  async exportCSV(): Promise<string> {
-    const rows = await this.getAllSymptoms();
-    const headers = ["id", "name", "severity", "timestamp", "notes", "tags"];
-    const body = rows.map(r =>
-      [
-        r.id, 
-        r.name, 
-        r.severity, 
-        r.timestamp, 
-        (r.notes ?? "").replace(/,/g, ";").replace(/\n/g, " "),
-        (r.tags ?? []).join(";")
-      ].join(",")
-    );
-    return [headers.join(","), ...body].join("\n");
-  },
-
-  async getAllAdherence(): Promise<MedicationAdherence[]> {
+  async deleteDose(id: string): Promise<void> {
     const idb = await initDB();
-    return idb.getAll("adherence");
+    await idb.delete('adherence', id);
+    notify();
   },
 
-  // Delete all data
+  // ----- Everything -----
   async deleteAllData(): Promise<void> {
     const idb = await initDB();
-    const tx = idb.transaction(["symptoms", "meds", "schedules", "adherence", "preferences"], "readwrite");
-    await tx.objectStore("symptoms").clear();
-    await tx.objectStore("meds").clear();
-    await tx.objectStore("schedules").clear();
-    await tx.objectStore("adherence").clear();
-    // Note: We might want to keep preferences, so commenting out for now
-    // await tx.objectStore("preferences").clear();
+    const names = STORES.filter(s => idb.objectStoreNames.contains(s));
+    const tx = idb.transaction(names, 'readwrite');
+    // A purchased license is not health data. Keep it so the person does not lose Pro.
+    const prefs = normalizePreferences(await tx.objectStore('preferences').get('user-preferences'));
+    await Promise.all(names.map(n => tx.objectStore(n).clear()));
+    if (prefs.licenseToken) {
+      await tx.objectStore('preferences').put({
+        ...DEFAULT_PREFERENCES,
+        onboardedAt: prefs.onboardedAt,
+        licenseToken: prefs.licenseToken,
+        licenseCheckedAt: prefs.licenseCheckedAt,
+      });
+    }
     await tx.done;
+    try {
+      localStorage.removeItem('mha_edit_draft');
+    } catch {
+      // Storage may be unavailable in private mode
+    }
+    notify();
   },
+
+  notifyChanged: notify,
 };
+
+/**
+ * Ask the browser to keep our data even when storage is tight.
+ * Safe to call repeatedly. Returns true if storage is persistent.
+ */
+export async function requestPersistentStorage(): Promise<boolean> {
+  try {
+    if (!navigator.storage?.persist) return false;
+    if (await navigator.storage.persisted()) return true;
+    return await navigator.storage.persist();
+  } catch {
+    return false;
+  }
+}

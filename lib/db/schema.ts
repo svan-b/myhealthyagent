@@ -1,61 +1,100 @@
-  // lib/db/schema.ts
+// lib/db/schema.ts
+// All timestamps are ISO 8601 strings in UTC. Display code converts to local time.
+
+/** Something the person felt. */
 export interface Symptom {
   id: string;
   name: string;
+  /** 1 to 10. The quick logger writes 2, 5, 7 or 9. */
   severity: number;
+  /** When the symptom started (or was noticed). */
+  timestamp: string;
+  /** Length in minutes. Undefined when unknown or ongoing. */
   duration_minutes?: number;
-  timestamp: string;  // Changed from Date to string
+  /** True when the symptom had not ended at the time of logging. */
+  ongoing?: boolean;
   notes?: string;
+  /** Legacy context tags from earlier versions. Kept for display and export. */
   tags?: string[];
+  updatedAt?: string;
+}
+
+export type FactorCategory = 'food' | 'drink' | 'activity' | 'sleep' | 'stress' | 'medication' | 'other';
+
+/** Something the person ate, drank, did or experienced that might affect symptoms. */
+export interface Factor {
+  id: string;
+  name: string;
+  category: FactorCategory;
+  timestamp: string;
+  notes?: string;
+  updatedAt?: string;
 }
 
 export interface UserPreferences {
-  id: string;
-  favoriteSymptoms: string[];
-  recentSymptoms: string[];
-  defaultSeverity: number;
+  id: 'user-preferences';
+  customSymptoms: string[];
+  customFactors: { name: string; category: FactorCategory }[];
   streakCount: number;
+  /** Local date string (Date.toDateString) of the last day anything was logged. */
   lastLogDate?: string;
+  onboardedAt?: string;
+  lastBackupAt?: string;
+  /** Optional name printed on clinician reports. Never leaves the device. */
+  reportName?: string;
+  /** Signed license token for Pro, issued by /api/license. */
+  licenseToken?: string;
+  /** Last time the license was confirmed valid by the server. */
+  licenseCheckedAt?: string;
 }
 
-export interface Template {
-  id: string;
-  name: string;
-  symptoms: string[];
-  defaultSeverity: number;
-}
+export type Frequency = 'daily' | 'twice-daily' | 'three-times' | 'four-times' | 'as-needed';
 
-export interface MedLog {
-  id: string;
-  name: string;
-  timestamp: string;  // ISO string, consistent with Symptom
-  dose?: string;      // e.g., "50mg", "2 tablets"
-  notes?: string;     // e.g., "with food", "missed dose"
-}
-
-// Medication Schedule Management
 export interface MedicationSchedule {
   id: string;
   medicationName: string;
   dosage: string;
-  frequency: 'daily' | 'twice-daily' | 'three-times' | 'four-times' | 'as-needed';
-  scheduleTimes: string[]; // ['08:00', '20:00'] in 24h format
+  frequency: Frequency;
+  /** Local wall clock times, 24h "HH:mm". Empty for as-needed. */
+  scheduleTimes: string[];
   isActive: boolean;
-  startDate: string; // ISO string
-  endDate?: string; // ISO string
+  startDate: string;
+  endDate?: string;
   notes?: string;
   createdAt: string;
   updatedAt: string;
 }
 
-// Medication Adherence Tracking
+export type DoseStatus = 'taken' | 'skipped' | 'missed' | 'pending';
+
+/** One dose record. Store name is "adherence" for backwards compatibility. */
 export interface MedicationAdherence {
   id: string;
   scheduleId: string;
   medicationName: string;
-  scheduledTime: string; // ISO string of when it was due
-  takenTime?: string; // ISO string of when actually taken
-  status: 'taken' | 'skipped' | 'missed' | 'pending';
+  /**
+   * For scheduled doses: local date and time "yyyy-MM-ddTHH:mm" the dose was due.
+   * For as-needed doses: the ISO time it was taken.
+   */
+  scheduledTime: string;
+  takenTime?: string;
+  status: DoseStatus;
   skipReason?: string;
   notes?: string;
 }
+
+/** Legacy medication log from v2. Migrated into factors on upgrade. */
+export interface MedLog {
+  id: string;
+  name: string;
+  timestamp: string;
+  dose?: string;
+  notes?: string;
+}
+
+export const DEFAULT_PREFERENCES: UserPreferences = {
+  id: 'user-preferences',
+  customSymptoms: [],
+  customFactors: [],
+  streakCount: 0,
+};

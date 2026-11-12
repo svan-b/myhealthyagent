@@ -1,153 +1,144 @@
-@import "tailwindcss";
+@import 'tailwindcss';
 
-/* Medical-grade theme configuration using Tailwind v4 */
-@theme {
-  --color-primary-50: #f0fdfa;
-  --color-primary-100: #ccfbf1;
-  --color-primary-200: #99f6e4;
-  --color-primary-300: #5eead4;
-  --color-primary-400: #2dd4bf;
-  --color-primary-500: #14b8a6;
-  --color-primary-600: #0d9488;
-  --color-primary-700: #0f766e;
-  --color-primary-800: #115e59;
-  --color-primary-900: #134e4a;
-  
-  --color-secondary-50: #f8fafc;
-  --color-secondary-100: #f1f5f9;
-  --color-secondary-200: #e2e8f0;
-  --color-secondary-300: #cbd5e1;
-  --color-secondary-400: #94a3b8;
-  --color-secondary-500: #64748b;
-  --color-secondary-600: #475569;
-  --color-secondary-700: #334155;
-  --color-secondary-800: #1e293b;
-  --color-secondary-900: #0f172a;
-  
-  --color-cyan-50: #ecfeff;
-  --color-cyan-100: #cffafe;
-  --color-cyan-200: #a5f3fc;
-  --color-cyan-300: #67e8f9;
-  --color-cyan-400: #22d3ee;
-  --color-cyan-500: #06b6d4;
-  --color-cyan-600: #0891b2;
-  --color-cyan-700: #0e7490;
-  --color-cyan-800: #155e75;
-  --color-cyan-900: #164e63;
-  
-  --color-slate-50: #f8fafc;
-  --color-slate-100: #f1f5f9;
-  --color-slate-200: #e2e8f0;
-  --color-slate-300: #cbd5e1;
-  --color-slate-400: #94a3b8;
-  --color-slate-500: #64748b;
-  --color-slate-600: #475569;
-  --color-slate-700: #334155;
-  --color-slate-800: #1e293b;
-  --color-slate-900: #0f172a;
-  
-  /* Medical theme semantic colors */
-  --color-medical-primary: var(--color-cyan-600);
-  --color-medical-primary-hover: var(--color-cyan-700);
-  --color-medical-secondary: var(--color-slate-600);
-  --color-medical-background: var(--color-slate-50);
-  --color-medical-surface: white;
-  --color-medical-border: var(--color-slate-200);
-  --color-medical-text: var(--color-slate-900);
-  --color-medical-text-muted: var(--color-slate-600);
-  
-  --font-family-sans: Inter, system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
-  
-  --border-radius-sm: 0.375rem;
-  --border-radius-md: 0.5rem;
-  --border-radius-lg: 0.75rem;
-  --border-radius-xl: 1rem;
+/* next-themes toggles a .dark class on <html>. Tailwind v4 defaults to the OS setting, so map it. */
+@custom-variant dark (&:where(.dark, .dark *));
+
+@theme inline {
+  --color-bg: var(--bg);
+  --color-surface: var(--surface);
+  --color-surface-2: var(--surface-2);
+  --color-fg: var(--fg);
+  --color-muted: var(--muted);
+  --color-subtle: var(--subtle);
+  --color-line: var(--line);
+  --color-line-strong: var(--line-strong);
+  --color-accent: var(--accent);
+  --color-accent-hover: var(--accent-hover);
+  --color-on-accent: var(--on-accent);
+  --color-accent-soft: var(--accent-soft);
+  --color-accent-ink: var(--accent-ink);
+  --color-danger: var(--danger);
+  --color-danger-soft: var(--danger-soft);
+  --color-ok: var(--ok);
+  --color-ok-soft: var(--ok-soft);
+  --color-warn: var(--warn);
+  --color-warn-soft: var(--warn-soft);
+  --color-sev-1: var(--sev-1);
+  --color-sev-2: var(--sev-2);
+  --color-sev-3: var(--sev-3);
+  --color-sev-4: var(--sev-4);
+  --font-sans: var(--font-inter), ui-sans-serif, system-ui, -apple-system, 'Segoe UI', sans-serif;
 }
 
-@layer base {
-  :root {
-    /* shadcn/ui compatibility variables */
-    --background: 248 250 252; /* slate-50 */
-    --foreground: 15 23 42; /* slate-900 */
-    --card: 255 255 255; /* white */
-    --card-foreground: 15 23 42; /* slate-900 */
-    --popover: 255 255 255; /* white */
-    --popover-foreground: 15 23 42; /* slate-900 */
-    --primary: 8 145 178; /* cyan-600 */
-    --primary-foreground: 255 255 255; /* white */
-    --secondary: 241 245 249; /* slate-100 */
-    --secondary-foreground: 15 23 42; /* slate-900 */
-    --muted: 241 245 249; /* slate-100 */
-    --muted-foreground: 100 116 139; /* slate-500 */
-    --accent: 226 232 240; /* slate-200 */
-    --accent-foreground: 15 23 42; /* slate-900 */
-    --destructive: 239 68 68; /* red-500 */
-    --destructive-foreground: 255 255 255; /* white */
-    --border: 226 232 240; /* slate-200 */
-    --input: 226 232 240; /* slate-200 */
-    --ring: 8 145 178; /* cyan-600 */
-    --radius: 0.5rem;
-  }
-
-  .dark {
-    --background: 2 8 23; /* slate-950 */
-    --foreground: 248 250 252; /* slate-50 */
-    --card: 15 23 42; /* slate-900 */
-    --card-foreground: 248 250 252; /* slate-50 */
-    --popover: 15 23 42; /* slate-900 */
-    --popover-foreground: 248 250 252; /* slate-50 */
-    --primary: 34 211 238; /* cyan-400 */
-    --primary-foreground: 15 23 42; /* slate-900 */
-    --secondary: 30 41 59; /* slate-800 */
-    --secondary-foreground: 248 250 252; /* slate-50 */
-    --muted: 30 41 59; /* slate-800 */
-    --muted-foreground: 148 163 184; /* slate-400 */
-    --accent: 51 65 85; /* slate-700 */
-    --accent-foreground: 248 250 252; /* slate-50 */
-    --destructive: 220 38 38; /* red-600 */
-    --destructive-foreground: 248 250 252; /* slate-50 */
-    --border: 51 65 85; /* slate-700 */
-    --input: 51 65 85; /* slate-700 */
-    --ring: 34 211 238; /* cyan-400 */
-  }
+:root {
+  color-scheme: light;
+  --bg: #f5f7f9;
+  --surface: #ffffff;
+  --surface-2: #eef2f5;
+  --fg: #0f1c2a;
+  --muted: #4b5b6b;
+  --subtle: #6b7a89;
+  --line: #e1e7ec;
+  --line-strong: #c9d3db;
+  --accent: #0e7490;
+  --accent-hover: #155e75;
+  --on-accent: #ffffff;
+  --accent-soft: #e3f4f8;
+  --accent-ink: #0b5568;
+  --danger: #b42318;
+  --danger-soft: #fdecea;
+  --ok: #067647;
+  --ok-soft: #e6f6ee;
+  --warn: #9a5b00;
+  --warn-soft: #fff4dc;
+  --sev-1: #3d9a8b;
+  --sev-2: #d39b1d;
+  --sev-3: #e06c2b;
+  --sev-4: #c4302b;
 }
 
-/* Medical-grade design system */
-* {
-  font-feature-settings: 'kern' 1, 'liga' 1, 'calt' 1;
+.dark {
+  color-scheme: dark;
+  --bg: #0b1218;
+  --surface: #121c25;
+  --surface-2: #1a2631;
+  --fg: #e8eef3;
+  --muted: #a6b4c0;
+  --subtle: #8796a3;
+  --line: #22303c;
+  --line-strong: #33434f;
+  --accent: #38bdd8;
+  --accent-hover: #67d0e6;
+  --on-accent: #062530;
+  --accent-soft: #10303b;
+  --accent-ink: #8ddcec;
+  --danger: #f2766b;
+  --danger-soft: #3a1714;
+  --ok: #4cc38a;
+  --ok-soft: #12301f;
+  --warn: #f0b44c;
+  --warn-soft: #34260c;
+  --sev-1: #4fb5a4;
+  --sev-2: #e0b03a;
+  --sev-3: #ec864a;
+  --sev-4: #ec5a52;
+}
+
+html {
+  -webkit-text-size-adjust: 100%;
+  -webkit-tap-highlight-color: transparent;
+}
+
+body {
+  background: var(--bg);
+  color: var(--fg);
+  font-family: var(--font-sans);
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
+  overscroll-behavior-y: none;
 }
 
-@layer base {
-  body {
-    font-family: Inter, system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
-  }
-  
-  /* Responsive font sizing for better readability */
-  html {
-    font-size: 16px;
-  }
-  
-  @media (max-width: 640px) {
-    html {
-      font-size: 15px;
-    }
-  }
-  
-  @media (min-width: 1024px) {
-    html {
-      font-size: 16px;
-    }
-  }
-  
-  @media (min-width: 1536px) {
-    html {
-      font-size: 17px;
-    }
-  }
+:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
 }
 
+button,
+[role='button'],
+a,
+input,
+select,
+textarea {
+  touch-action: manipulation;
+}
+
+/* Prevent iOS zoom on focus: inputs must be at least 16px */
+input,
+select,
+textarea {
+  font-size: 16px;
+}
+
+.pb-nav {
+  padding-bottom: calc(5.5rem + env(safe-area-inset-bottom));
+}
+
+.safe-bottom {
+  padding-bottom: env(safe-area-inset-bottom);
+}
+
+.safe-top {
+  padding-top: env(safe-area-inset-top);
+}
+
+@keyframes sheet-in {
+  from {
+    transform: translateY(100%);
+  }
+  to {
+    transform: translateY(0);
+  }
+}
 @keyframes fade-in {
   from {
     opacity: 0;
@@ -156,154 +147,18 @@
     opacity: 1;
   }
 }
-
-@keyframes slide-up {
-  from {
-    opacity: 0;
-    transform: translateY(20px);
-  }
-  to {
-    opacity: 1;
-    transform: translateY(0);
-  }
+.animate-sheet-in {
+  animation: sheet-in 220ms cubic-bezier(0.2, 0.8, 0.2, 1);
 }
-
 .animate-fade-in {
-  animation: fade-in 0.5s ease-out;
+  animation: fade-in 160ms ease-out;
 }
 
-.animate-slide-up {
-  animation: slide-up 0.5s ease-out;
-  animation-fill-mode: both;
-}
-
-/* Professional medical app styling */
-.medical-card {
-  @apply bg-white dark:bg-gray-800 rounded-lg shadow-sm border border-gray-200 dark:border-gray-700;
-}
-
-.medical-button-primary {
-  @apply bg-blue-900 hover:bg-blue-800 text-white font-medium rounded-lg transition-colors;
-}
-
-.medical-button-secondary {
-  @apply bg-gray-100 hover:bg-gray-200 dark:bg-gray-700 dark:hover:bg-gray-600 text-gray-700 dark:text-gray-200 font-medium rounded-lg transition-colors;
-}
-
-/* Remove focus outlines for cleaner look */
-button:focus-visible {
-  @apply outline-none ring-2 ring-blue-500 ring-offset-2;
-}
-
-input:focus-visible {
-  @apply outline-none ring-2 ring-blue-500 ring-offset-2;
-}
-
-/* Professional scrollbar styling */
-::-webkit-scrollbar {
-  width: 8px;
-  height: 8px;
-}
-
-::-webkit-scrollbar-track {
-  @apply bg-gray-100 dark:bg-gray-800;
-}
-
-::-webkit-scrollbar-thumb {
-  @apply bg-gray-400 dark:bg-gray-600 rounded;
-}
-
-::-webkit-scrollbar-thumb:hover {
-  @apply bg-gray-500 dark:bg-gray-500;
-}
-
-/* Modal and animation utilities */
-.animate-in {
-  animation-fill-mode: both;
-}
-
-.fade-in {
-  animation: fade-in 0.2s ease-out;
-}
-
-.slide-in-from-bottom {
-  animation: slide-in-from-bottom 0.3s ease-out;
-}
-
-@keyframes slide-in-from-bottom {
-  from {
-    opacity: 0;
-    transform: translateY(100%);
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    transition-duration: 0.01ms !important;
   }
-  to {
-    opacity: 1;
-    transform: translateY(0);
-  }
-}
-
-/* Clinical button variants using medical theme */
-.btn-primary {
-  @apply px-4 py-2.5 bg-cyan-600 hover:bg-cyan-700 text-white font-medium rounded-lg transition-all duration-200 focus:outline-none focus:ring-2 focus:ring-cyan-500 focus:ring-offset-2 active:bg-cyan-800;
-}
-
-.btn-secondary {
-  @apply px-4 py-2.5 bg-white hover:bg-slate-50 text-slate-700 font-medium rounded-lg border border-slate-300 transition-all duration-200 focus:outline-none focus:ring-2 focus:ring-slate-400 focus:ring-offset-2 active:bg-slate-100;
-}
-
-.btn-ghost {
-  @apply px-4 py-2.5 hover:bg-slate-100 text-slate-600 font-medium rounded-lg transition-all duration-200 focus:outline-none focus:ring-2 focus:ring-slate-400 focus:ring-offset-2 active:bg-slate-200;
-}
-
-/* Clinical cards using medical theme */
-.medical-card {
-  @apply bg-white rounded-lg border border-slate-200 shadow-sm transition-shadow duration-200;
-}
-
-.medical-card-hover {
-  @apply hover:shadow-md hover:border-slate-300 transition-all duration-200;
-}
-
-/* Form elements using medical theme */
-.medical-input {
-  @apply w-full px-3 py-2 bg-white border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-cyan-500 focus:border-cyan-500 transition-all duration-200 text-slate-900 placeholder-slate-400;
-}
-
-/* Medical theme utilities */
-.medical-text-primary {
-  @apply text-slate-900;
-}
-
-.medical-text-secondary {
-  @apply text-slate-600;
-}
-
-.medical-text-muted {
-  @apply text-slate-500;
-}
-
-.medical-bg-surface {
-  @apply bg-white;
-}
-
-.medical-bg-background {
-  @apply bg-slate-50;
-}
-
-.medical-border {
-  @apply border-slate-200;
-}
-
-.medical-accent {
-  @apply text-cyan-600;
-}
-
-.medical-accent-bg {
-  @apply bg-cyan-50;
-}
-
-/* Remove all decorative elements */
-.emoji-icon,
-.decorative-graphic,
-svg.decorative {
-  display: none !important;
 }

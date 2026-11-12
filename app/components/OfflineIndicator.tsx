@@ -1,5 +1,5 @@
-// app/components/OfflineIndicator.tsx
 'use client';
+
 import { useEffect, useState } from 'react';
 
 export function OfflineIndicator() {
@@ -16,8 +16,11 @@ export function OfflineIndicator() {
   }, []);
   if (online) return null;
   return (
-    <div className="fixed bottom-3 left-1/2 -translate-x-1/2 z-50 rounded-xl bg-amber-100 text-amber-900 px-3 py-1 text-sm shadow">
-      Offline mode — data saves to your device
+    <div
+      role="status"
+      className="fixed top-[calc(3.75rem+env(safe-area-inset-top))] left-1/2 -translate-x-1/2 z-40 rounded-full bg-warn-soft text-warn px-3 py-1 text-[13px] font-semibold shadow"
+    >
+      Offline. Everything still saves on this device.
     </div>
   );
 }

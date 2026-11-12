@@ -1,0 +1,382 @@
+'use client';
+
+import * as React from 'react';
+import Link from 'next/link';
+import { useTheme } from 'next-themes';
+import { toast } from 'sonner';
+import { FileText, Download, Upload, Table, Trash2, Mail, ShieldCheck, Sparkles } from 'lucide-react';
+import { Sheet } from '@/components/ui/sheet';
+import { Button } from '@/components/ui/button';
+import { Segmented } from '@/components/ui/chip';
+import { Input, Label } from '@/components/ui/field';
+import { Card } from '@/components/ui/card';
+import { useHealthData } from '@/lib/hooks/useHealthData';
+import { db } from '@/lib/db/client';
+import { downloadFile, exportBackup, exportCSV, importBackup } from '@/lib/db/backup';
+import { usePro } from '@/lib/pro/client';
+import { config } from '@/lib/config';
+import { errorMessage } from '@/lib/utils';
+import { LicenseKeyForm, UpgradeCard } from '../pro/Upgrade';
+
+const stamp = () => new Date().toISOString().slice(0, 10);
+
+export function SettingsSheet({ open, onOpenChange }: { open: boolean; onOpenChange: (o: boolean) => void }) {
+  return (
+    <Sheet
+      open={open}
+      onOpenChange={onOpenChange}
+      title="Reports and data"
+      description="Everything here runs on your device."
+    >
+      <div className="space-y-7">
+        <ReportSection />
+        <BackupSection />
+        <ProSection />
+        <AppearanceSection />
+        <AboutSection />
+        <DeleteSection onDone={() => onOpenChange(false)} />
+      </div>
+    </Sheet>
+  );
+}
+
+function Group({ title, children }: { title: string; children: React.ReactNode }) {
+  return (
+    <section>
+      <h3 className="text-[13px] font-semibold uppercase tracking-wide text-subtle mb-2">{title}</h3>
+      {children}
+    </section>
+  );
+}
+
+function ReportSection() {
+  const data = useHealthData();
+  const { isPro, enabled } = usePro();
+  const [days, setDays] = React.useState<'30' | '90'>('30');
+  const [name, setName] = React.useState(data.prefs.reportName ?? '');
+  const [busy, setBusy] = React.useState(false);
+
+  React.useEffect(() => setName(data.prefs.reportName ?? ''), [data.prefs.reportName]);
+
+  const generate = async () => {
+    setBusy(true);
+    try {
+      if (name !== (data.prefs.reportName ?? '')) await db.updatePreferences({ reportName: name.trim() || undefined });
+      const { buildReport } = await import('@/lib/report/pdf');
+      const blob = await buildReport({ ...data, days: Number(days), patientName: name.trim() || undefined });
+      downloadFile(blob, `symptom-report-${stamp()}.pdf`, 'application/pdf');
+      toast.success('Report downloaded');
+    } catch (e) {
+      toast.error(errorMessage(e, 'Could not create the report'));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <Group title="Doctor report">
+      <Card className="p-4 space-y-3">
+        <p className="text-sm text-muted">
+          A clear PDF with your symptoms, daily chart, possible triggers, medications and full log. Bring it to your
+          next appointment.
+        </p>
+        {enabled && !isPro ? (
+          <UpgradeCard title="Doctor reports are part of Pro" compact />
+        ) : (
+          <>
+            <Segmented<'30' | '90'>
+              label="Report period"
+              value={days}
+              onChange={setDays}
+              options={[
+                { value: '30', label: 'Last 30 days' },
+                { value: '90', label: 'Last 90 days' },
+              ]}
+            />
+            <div>
+              <Label htmlFor="report-name" hint="Optional. Printed on the report, stays on this device.">
+                Your name
+              </Label>
+              <Input
+                id="report-name"
+                value={name}
+                onChange={e => setName(e.target.value)}
+                maxLength={80}
+                autoComplete="name"
+              />
+            </div>
+            <Button block onClick={generate} disabled={busy}>
+              <FileText /> {busy ? 'Creating report…' : 'Download PDF report'}
+            </Button>
+          </>
+        )}
+      </Card>
+    </Group>
+  );
+}
+
+function BackupSection() {
+  const { prefs, symptoms, factors } = useHealthData();
+  const fileRef = React.useRef<HTMLInputElement>(null);
+  const [busy, setBusy] = React.useState<string | null>(null);
+  const last = prefs.lastBackupAt ? new Date(prefs.lastBackupAt) : null;
+  const stale = !last || Date.now() - last.getTime() > 14 * 86_400_000;
+  const hasData = symptoms.length + factors.length > 0;
+
+  const backup = async () => {
+    setBusy('backup');
+    try {
+      downloadFile(await exportBackup(), `myhealthyagent-backup-${stamp()}.json`, 'application/json');
+      await db.updatePreferences({ lastBackupAt: new Date().toISOString() });
+      toast.success('Backup downloaded', { description: 'Keep it somewhere safe, like iCloud Drive or Google Drive.' });
+    } catch (e) {
+      toast.error(errorMessage(e, 'Backup failed'));
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  const csv = async () => {
+    setBusy('csv');
+    try {
+      downloadFile(await exportCSV(), `myhealthyagent-${stamp()}.csv`, 'text/csv;charset=utf-8');
+    } catch (e) {
+      toast.error(errorMessage(e, 'Export failed'));
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  const restore = async (file: File) => {
+    setBusy('restore');
+    try {
+      if (file.size > 50 * 1024 * 1024) throw new Error('That file is too large to be a backup.');
+      const r = await importBackup(await file.text());
+      toast.success('Backup restored', {
+        description: `${r.symptoms} symptoms, ${r.factors} other entries, ${r.schedules} medications${r.skipped ? `. ${r.skipped} unreadable rows skipped.` : '.'}`,
+      });
+    } catch (e) {
+      toast.error(errorMessage(e, 'Could not restore that file'));
+    } finally {
+      setBusy(null);
+      if (fileRef.current) fileRef.current.value = '';
+    }
+  };
+
+  return (
+    <Group title="Backup">
+      <Card className="p-4 space-y-3">
+        <p className="text-sm text-muted">
+          Your data lives only in this browser. If you clear site data, lose your phone or switch devices, a backup file
+          is the only way to get it back.
+        </p>
+        {hasData && stale && (
+          <p className="text-sm rounded-xl bg-warn-soft text-warn px-3 py-2 font-medium">
+            {last ? `Last backup was ${last.toLocaleDateString()}.` : 'You have not made a backup yet.'}
+          </p>
+        )}
+        <Button block onClick={backup} disabled={busy !== null}>
+          <Download /> {busy === 'backup' ? 'Preparing…' : 'Download backup'}
+        </Button>
+        <div className="grid grid-cols-2 gap-2">
+          <Button variant="secondary" onClick={() => fileRef.current?.click()} disabled={busy !== null}>
+            <Upload /> {busy === 'restore' ? 'Restoring…' : 'Restore'}
+          </Button>
+          <Button variant="secondary" onClick={csv} disabled={busy !== null}>
+            <Table /> Spreadsheet
+          </Button>
+        </div>
+        <input
+          ref={fileRef}
+          type="file"
+          accept="application/json,.json"
+          className="hidden"
+          onChange={e => {
+            const f = e.target.files?.[0];
+            if (f) restore(f);
+          }}
+        />
+        <p className="text-[13px] text-subtle">
+          Restoring adds entries from the file. It never removes what is already here.
+        </p>
+      </Card>
+    </Group>
+  );
+}
+
+function ProSection() {
+  const pro = usePro();
+  const [busy, setBusy] = React.useState(false);
+  if (!pro.enabled) return null;
+
+  const copy = async () => {
+    if (!pro.licenseToken) return;
+    try {
+      await navigator.clipboard.writeText(pro.licenseToken);
+      toast.success('License key copied');
+    } catch {
+      toast.error('Could not copy. Select and copy the key manually.');
+    }
+  };
+
+  return (
+    <Group title="Pro">
+      <Card className="p-4 space-y-3">
+        {pro.isPro ? (
+          <>
+            <p className="flex items-center gap-2 font-semibold text-ok">
+              <Sparkles className="size-4" aria-hidden /> Pro is active on this device
+            </p>
+            <p className="text-sm text-muted">
+              Save your license key to use Pro on another device. It is also included in backups.
+            </p>
+            <code className="block text-[12px] break-all rounded-lg bg-surface-2 p-2 text-muted select-all">
+              {pro.licenseToken}
+            </code>
+            <div className="grid grid-cols-2 gap-2">
+              <Button variant="secondary" onClick={copy}>
+                Copy key
+              </Button>
+              <Button
+                variant="secondary"
+                disabled={busy}
+                onClick={async () => {
+                  setBusy(true);
+                  try {
+                    await pro.openPortal();
+                  } catch (e) {
+                    toast.error(errorMessage(e, 'Could not open billing'));
+                    setBusy(false);
+                  }
+                }}
+              >
+                Manage billing
+              </Button>
+            </div>
+          </>
+        ) : (
+          <>
+            {pro.hasKey && (
+              <p className="text-sm rounded-xl bg-warn-soft text-warn px-3 py-2 font-medium">
+                Your Pro license is no longer active. Renew below or manage billing.
+              </p>
+            )}
+            <UpgradeCard />
+            <p className="text-sm text-muted pt-1">Already bought Pro on another device?</p>
+            <LicenseKeyForm />
+          </>
+        )}
+      </Card>
+    </Group>
+  );
+}
+
+function AppearanceSection() {
+  const { theme, setTheme } = useTheme();
+  const [mounted, setMounted] = React.useState(false);
+  React.useEffect(() => setMounted(true), []);
+  if (!mounted) return null;
+  return (
+    <Group title="Appearance">
+      <Segmented<string>
+        label="Theme"
+        value={theme ?? 'system'}
+        onChange={setTheme}
+        options={[
+          { value: 'system', label: 'Auto' },
+          { value: 'light', label: 'Light' },
+          { value: 'dark', label: 'Dark' },
+        ]}
+      />
+    </Group>
+  );
+}
+
+function AboutSection() {
+  return (
+    <Group title="About">
+      <Card className="divide-y divide-line">
+        <Link href="/privacy" className="flex items-center gap-3 px-4 py-3 text-fg hover:bg-surface-2">
+          <ShieldCheck className="size-4 text-muted" aria-hidden /> Privacy
+        </Link>
+        <Link href="/terms" className="flex items-center gap-3 px-4 py-3 text-fg hover:bg-surface-2">
+          <FileText className="size-4 text-muted" aria-hidden /> Terms and medical disclaimer
+        </Link>
+        {config.supportEmail && (
+          <a
+            href={`mailto:${config.supportEmail}?subject=myHealthyAgent%20feedback`}
+            className="flex items-center gap-3 px-4 py-3 text-fg hover:bg-surface-2"
+          >
+            <Mail className="size-4 text-muted" aria-hidden /> Send feedback
+          </a>
+        )}
+      </Card>
+      <p className="text-[13px] text-subtle mt-3">
+        myHealthyAgent is a personal tracking tool. It does not diagnose, treat or give medical advice. In an emergency,
+        call your local emergency number.
+      </p>
+    </Group>
+  );
+}
+
+function DeleteSection({ onDone }: { onDone: () => void }) {
+  const [stage, setStage] = React.useState<'idle' | 'confirm'>('idle');
+  const [text, setText] = React.useState('');
+  const [busy, setBusy] = React.useState(false);
+
+  if (stage === 'idle') {
+    return (
+      <Button variant="quiet" block onClick={() => setStage('confirm')} className="text-danger">
+        <Trash2 /> Delete all data
+      </Button>
+    );
+  }
+  return (
+    <Card className="p-4 space-y-3 border-danger/40">
+      <p className="font-semibold text-danger">Delete everything on this device?</p>
+      <p className="text-sm text-muted">
+        All symptoms, entries, medications, dose history and settings will be erased. This cannot be undone. Download a
+        backup first if you might want it later.
+      </p>
+      <div>
+        <Label htmlFor="confirm-delete">Type DELETE to confirm</Label>
+        <Input
+          id="confirm-delete"
+          value={text}
+          onChange={e => setText(e.target.value)}
+          autoComplete="off"
+          autoCapitalize="characters"
+        />
+      </div>
+      <div className="grid grid-cols-2 gap-2">
+        <Button
+          variant="secondary"
+          onClick={() => {
+            setStage('idle');
+            setText('');
+          }}
+        >
+          Cancel
+        </Button>
+        <Button
+          variant="danger"
+          disabled={text.trim().toUpperCase() !== 'DELETE' || busy}
+          onClick={async () => {
+            setBusy(true);
+            try {
+              await db.deleteAllData();
+              toast.success('All data deleted');
+              onDone();
+            } catch (e) {
+              toast.error(errorMessage(e));
+            } finally {
+              setBusy(false);
+            }
+          }}
+        >
+          Delete
+        </Button>
+      </div>
+    </Card>
+  );
+}
