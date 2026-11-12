@@ -221,3 +221,104 @@ test('an as-needed dose logged by mistake can be removed later', async ({ page }
   ).toHaveCount(1);
   expect(errors).toEqual([]);
 });
+
+/** Opens the app with Ibuprofen doses taken at 9:00 AM and 2:00 PM on Nov 10. */
+async function openWithIbuprofen(page: Page) {
+  const loggedAt = (id: string, iso: string) => ({
+    id,
+    scheduleId: 'i1',
+    medicationName: 'Ibuprofen',
+    scheduledTime: iso,
+    takenTime: iso,
+    status: 'taken',
+  });
+  await openWith(page, {
+    schedules: [{ ...schedule('i1', 'Ibuprofen', []), frequency: 'as-needed' }],
+    doses: [loggedAt('d1', '2026-11-10T14:00:00.000Z'), loggedAt('d2', '2026-11-10T19:00:00.000Z')],
+  });
+}
+
+/** Opens the list of Ibuprofen doses from the medication's edit sheet. */
+async function openDoseList(page: Page) {
+  await openWithIbuprofen(page);
+  await page.getByRole('button', { name: 'Edit Ibuprofen' }).click();
+  await page.getByRole('dialog', { name: 'Edit medication' }).getByRole('button', { name: 'Logged doses' }).click();
+  const list = page.getByRole('dialog', { name: 'Ibuprofen doses' });
+  await expect(list.getByRole('button', { name: /^Remove the dose taken at/ })).toHaveCount(2);
+  return list;
+}
+
+const doseCount = async (page: Page) => (await readStore(page, 'adherence')).length;
+
+test('a dose tapped twice in the dose list is removed and listed once', async ({ page }) => {
+  const errors = watchErrors(page);
+  const list = await openDoseList(page);
+  // Two taps before the first removal has been saved
+  await list.getByRole('button', { name: /^Remove the dose taken at 2:00\sPM$/ }).evaluate((button: HTMLElement) => {
+    button.click();
+    button.click();
+  });
+  await expect.poll(() => doseCount(page)).toBe(1);
+  await expect(list.getByText('Removed')).toHaveCount(1);
+  await expect(list.getByRole('button', { name: /^(Remove|Undo removing) the dose taken at/ })).toHaveCount(2);
+  expect(errors).toEqual([]);
+});
+
+test('looking at logged doses keeps changes in the edit sheet that are not saved yet', async ({ page }) => {
+  const errors = watchErrors(page);
+  await openWithIbuprofen(page);
+  await page.getByRole('button', { name: 'Edit Ibuprofen' }).click();
+  const edit = page.getByRole('dialog', { name: 'Edit medication' });
+  await edit.getByLabel('Dose', { exact: true }).fill('400 mg');
+  await edit.getByRole('button', { name: 'Logged doses' }).click();
+  await page.getByRole('dialog', { name: 'Ibuprofen doses' }).getByRole('button', { name: 'Close' }).click();
+
+  // The edit sheet is still open with the new dose, and saving it keeps the dose
+  await expect(edit.getByLabel('Dose', { exact: true })).toHaveValue('400 mg');
+  await edit.getByRole('button', { name: 'Save' }).click();
+  await expect(page.getByText('Medication updated')).toBeVisible();
+  const [saved] = await readStore<{ dosage: string }>(page, 'schedules');
+  expect(saved.dosage).toBe('400 mg');
+  expect(errors).toEqual([]);
+});
+
+test('doses the old app recorded are listed with their status', async ({ page }) => {
+  const errors = watchErrors(page);
+  // The old app keyed scheduled doses by their due time with seconds, and could record a skip
+  const old = (id: string, scheduledTime: string, over: object) => ({
+    id,
+    scheduleId: 'm1',
+    medicationName: 'Metformin',
+    scheduledTime,
+    ...over,
+  });
+  await openWith(page, {
+    schedules: [schedule('m1', 'Metformin', ['08:00'])],
+    doses: [
+      old('old-1', '2025-08-16T08:00:00', { status: 'skipped' }),
+      old('old-2', '2025-08-17T08:00:00', { status: 'taken', takenTime: '2025-08-17T12:05:00.000Z' }),
+    ],
+  });
+  await page.getByRole('button', { name: 'Edit Metformin' }).click();
+  await page.getByRole('dialog', { name: 'Edit medication' }).getByRole('button', { name: 'Logged doses' }).click();
+  const list = page.getByRole('dialog', { name: 'Metformin doses' });
+  await expect(list.getByText(/^8:00\sAM dose, skipped$/)).toBeVisible();
+  await expect(list.getByText(/^Taken at 8:05\sAM$/)).toBeVisible();
+  await expect(list.getByText(/^Taken at 8:00\sAM$/)).toHaveCount(0);
+  expect(errors).toEqual([]);
+});
+
+test('putting back a removed dose keeps focus on that dose', async ({ page }) => {
+  const errors = watchErrors(page);
+  const list = await openDoseList(page);
+  await list.getByRole('button', { name: /^Remove the dose taken at 2:00\sPM$/ }).focus();
+  await page.keyboard.press('Enter');
+  await expect(list.getByRole('button', { name: /^Undo removing the dose taken at 2:00\sPM$/ })).toBeFocused();
+  await expect.poll(() => doseCount(page)).toBe(1);
+
+  await page.keyboard.press('Enter');
+  await expect.poll(() => doseCount(page)).toBe(2);
+  await expect(list.getByText('Removed')).toHaveCount(0);
+  await expect(list.getByRole('button', { name: /^Remove the dose taken at 2:00\sPM$/ })).toBeFocused();
+  expect(errors).toEqual([]);
+});

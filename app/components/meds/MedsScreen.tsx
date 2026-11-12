@@ -292,15 +292,8 @@ export function MedsScreen() {
       {editing && (
         <MedicationSheet
           schedule={editing === 'new' ? null : editing}
+          hasDoses={editing !== 'new' && doses.some(d => d.scheduleId === editing.id)}
           onClose={() => setEditing(null)}
-          onShowDoses={
-            editing !== 'new' && doses.some(d => d.scheduleId === editing.id)
-              ? () => {
-                  setEditing(null);
-                  setReviewing(editing);
-                }
-              : undefined
-          }
         />
       )}
       {reviewing && <DoseListSheet schedule={reviewing} onClose={() => setReviewing(null)} />}
@@ -310,12 +303,12 @@ export function MedsScreen() {
 
 function MedicationSheet({
   schedule,
+  hasDoses,
   onClose,
-  onShowDoses,
 }: {
   schedule: MedicationSchedule | null;
+  hasDoses: boolean;
   onClose: () => void;
-  onShowDoses?: () => void;
 }) {
   const [name, setName] = React.useState(schedule?.medicationName ?? '');
   const [dosage, setDosage] = React.useState(schedule?.dosage ?? '');
@@ -324,6 +317,8 @@ function MedicationSheet({
   const [notes, setNotes] = React.useState(schedule?.notes ?? '');
   const [saving, setSaving] = React.useState(false);
   const [confirmDelete, setConfirmDelete] = React.useState(false);
+  // The dose list opens on top of this sheet, so changes not saved yet are still here after it closes.
+  const [showDoses, setShowDoses] = React.useState(false);
 
   const changeFrequency = (f: Frequency) => {
     setFrequency(f);
@@ -450,8 +445,8 @@ function MedicationSheet({
             placeholder="With food"
           />
         </div>
-        {onShowDoses && (
-          <Button variant="secondary" block onClick={onShowDoses}>
+        {schedule && hasDoses && (
+          <Button variant="secondary" block onClick={() => setShowDoses(true)}>
             <History /> Logged doses
           </Button>
         )}
@@ -480,6 +475,7 @@ function MedicationSheet({
           </div>
         )}
       </div>
+      {schedule && showDoses && <DoseListSheet schedule={schedule} onClose={() => setShowDoses(false)} />}
     </Sheet>
   );
 }
@@ -500,9 +496,11 @@ const STATUS_WORDS: Record<MedicationAdherence['status'], string> = {
 /** What the list shows for a dose, and how its buttons name it. */
 function describeDose(d: MedicationAdherence, at: Date): { text: string; name: string } {
   const clock = at.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
-  return isSlotKey(d.scheduledTime)
-    ? { text: `${clock} dose, ${STATUS_WORDS[d.status]}`, name: `the ${clock} dose, ${STATUS_WORDS[d.status]}` }
-    : { text: `Taken at ${clock}`, name: `the dose taken at ${clock}` };
+  // As-needed doses are always taken. Doses the old app recorded have a different key and can be skipped.
+  if (!isSlotKey(d.scheduledTime) && d.status === 'taken') {
+    return { text: `Taken at ${clock}`, name: `the dose taken at ${clock}` };
+  }
+  return { text: `${clock} dose, ${STATUS_WORDS[d.status]}`, name: `the ${clock} dose, ${STATUS_WORDS[d.status]}` };
 }
 
 function dayHeading(dayKey: string, now: Date): string {
@@ -521,17 +519,23 @@ function dayHeading(dayKey: string, now: Date): string {
 function DoseListSheet({ schedule, onClose }: { schedule: MedicationSchedule; onClose: () => void }) {
   const { doses } = useHealthData();
   const [limit, setLimit] = React.useState(PAGE);
-  const [removed, setRemoved] = React.useState<MedicationAdherence[]>([]);
+  // Doses removed or put back while the list is open, by id. Each keeps its row until the sheet
+  // closes, also while the data reloads, so focus stays on its button and a double tap cannot list
+  // it twice.
+  const [changed, setChanged] = React.useState<ReadonlyMap<string, { dose: MedicationAdherence; removed: boolean }>>(
+    () => new Map(),
+  );
   const now = new Date();
 
   const rows = React.useMemo(() => {
     const here = doses.filter(d => d.scheduleId === schedule.id);
-    const gone = removed.filter(r => !here.some(d => d.id === r.id));
-    return [...here, ...gone]
+    const ids = new Set(here.map(d => d.id));
+    const kept = [...changed.values()].filter(c => !ids.has(c.dose.id)).map(c => c.dose);
+    return [...here, ...kept]
       .map(d => ({ d, at: doseTime(d) }))
       .filter(r => !Number.isNaN(r.at.getTime()))
       .sort((a, b) => b.at.getTime() - a.at.getTime());
-  }, [doses, removed, schedule.id]);
+  }, [doses, changed, schedule.id]);
   const groups = React.useMemo(() => {
     const map = new Map<string, typeof rows>();
     for (const r of rows.slice(0, limit)) {
@@ -541,12 +545,14 @@ function DoseListSheet({ schedule, onClose }: { schedule: MedicationSchedule; on
     return [...map.entries()];
   }, [rows, limit]);
 
-  const isRemoved = (d: MedicationAdherence) => removed.some(r => r.id === d.id);
+  const isRemoved = (d: MedicationAdherence) => changed.get(d.id)?.removed === true;
+  const note = (dose: MedicationAdherence, removed: boolean) =>
+    setChanged(map => new Map(map).set(dose.id, { dose, removed }));
 
   const remove = async (d: MedicationAdherence) => {
     try {
       await db.deleteDose(d.id);
-      setRemoved(list => [...list, d]);
+      note(d, true);
     } catch (e) {
       toast.error(errorMessage(e));
     }
@@ -555,7 +561,7 @@ function DoseListSheet({ schedule, onClose }: { schedule: MedicationSchedule; on
   const putBack = async (d: MedicationAdherence) => {
     try {
       await db.restoreDose(d);
-      setRemoved(list => list.filter(r => r.id !== d.id));
+      note(d, false);
     } catch (e) {
       toast.error(errorMessage(e));
     }
