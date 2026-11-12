@@ -71,7 +71,7 @@ Free here: [LINK]. I'd love to hear what would make it work better for your cond
 
 No account, no backend for health data. Everything is in IndexedDB and the analysis runs in a Web Worker.
 
-The interesting part is the trigger test. Naive correlation fails badly here because habits and symptoms both follow the clock: morning coffee looks like it causes afternoon headaches simply because both happen during the day. So for each item, symptom and delay window it compares symptom starts against the same hours of the day when the window isn't active (an exact Poisson binomial test stratified by hour), then applies Benjamini–Hochberg across every comparison. On random data about 2% of datasets show any finding at all.
+The interesting part is the trigger test. Naive correlation fails badly here because habits and symptoms both follow the clock: morning coffee looks like it causes afternoon headaches simply because both happen during the day. So for each item, symptom and delay window it compares symptom starts with the same clock times on other tracked days. A day's starts move together as one block, so a bad day with three episodes is not three independent chances, and logging a symptom again while it is still there is not a new start. The count is tested exactly against that comparison, then Benjamini–Hochberg runs across every comparison. On simulated diaries with nothing going on, about 1 to 2% show any finding and fewer than 1 in 300 show a strong one. It also tells you which items it could not test (logged daily at the same time, or too rarely), so nothing looks ruled out that was never checked.
 
 Code and method: [REPO LINK]. App: [LINK]
 
