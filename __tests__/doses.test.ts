@@ -174,9 +174,13 @@ describe('editing dose times', () => {
   });
 
   it('never moves a taken dose onto a dose that was due anyway', () => {
-    // Took the morning dose, then dropped it. The evening dose is still to take.
+    // Took the morning dose, then dropped it. The evening dose is still to take, and the morning
+    // dose stays listed at its own time.
     const eveningOnly = changeTimes(med(), 'daily', ['20:00'], nov12(10));
-    expect(states(dosesForDay([eveningOnly], [dose(NOV12, '08:00')], nov12(10, 5)))).toEqual([['20:00', 'upcoming']]);
+    expect(states(dosesForDay([eveningOnly], [dose(NOV12, '08:00')], nov12(10, 5)))).toEqual([
+      ['08:00', 'taken'],
+      ['20:00', 'upcoming'],
+    ]);
   });
 
   it('shows one dose, not two, when a time is moved before the dose is taken', () => {

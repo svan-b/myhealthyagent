@@ -5,6 +5,7 @@ import { Plus, Check, Pause, Play, Pencil, ChevronRight, History } from 'lucide-
 import { toast } from 'sonner';
 import { Card, SectionTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
+import { Segmented } from '@/components/ui/chip';
 import { Input, Select, Label } from '@/components/ui/field';
 import { Sheet } from '@/components/ui/sheet';
 import { useHealthData } from '@/lib/hooks/useHealthData';
@@ -14,11 +15,16 @@ import {
   adherenceFor,
   changeTimes,
   checklistDoses,
+  doseRecord,
+  dosesForDay,
   dueKeyToDate,
   isSlotKey,
   localDateKey,
   pauseSchedule,
+  recentDoses,
+  RECENT_DAYS,
   resumeSchedule,
+  takenAt,
   type DoseSlot,
   type DoseState,
 } from '@/lib/medication/doses';
@@ -38,7 +44,8 @@ const STATE_LABELS: Record<DoseState, string> = {
   upcoming: 'Later',
   taken: '',
   skipped: '',
-  untracked: '',
+  // Before the medication was added, during a pause, or at a time added later that day
+  untracked: 'Not due',
 };
 
 /** Toasts with an Undo button stay long enough to read and reach. */
@@ -49,14 +56,54 @@ const fmtTime = (hhmm: string) => {
   return new Date(2000, 0, 1, h, m).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
 };
 
+const fmtClock = (d: Date) => d.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
+
 const times = (n: number) => `${n} ${n === 1 ? 'time' : 'times'}`;
+
+/** One key per dose row, also across days. */
+const rowId = (slot: DoseSlot) => `${slot.schedule.id}|${slot.key}`;
+
+/**
+ * Saves a dose marked taken or skipped. A dose taken after its window closed is recorded at the time
+ * it was due, and the toast says so. A second tap while the first is saving does nothing.
+ */
+function useMarkDose() {
+  const saving = React.useRef(new Set<string>());
+  return React.useCallback(async (slot: DoseSlot, status: 'taken' | 'skipped') => {
+    const id = rowId(slot);
+    if (saving.current.has(id)) return;
+    saving.current.add(id);
+    const now = new Date();
+    const record = doseRecord(slot, status, newId(), now);
+    const name = slot.schedule.medicationName;
+    try {
+      await db.saveDose(record);
+      const late = record.takenTime && record.takenTime !== now.toISOString();
+      toast.success(
+        status === 'skipped'
+          ? `${name} skipped`
+          : late
+            ? `${name} marked taken at ${fmtClock(new Date(record.takenTime!))}`
+            : `${name} marked taken`,
+      );
+    } catch (e) {
+      toast.error(errorMessage(e));
+    } finally {
+      saving.current.delete(id);
+    }
+  }, []);
+}
 
 export function MedsScreen() {
   const { schedules, doses, loading } = useHealthData();
   const [editing, setEditing] = React.useState<MedicationSchedule | 'new' | null>(null);
   const [reviewing, setReviewing] = React.useState<MedicationSchedule | null>(null);
   const [now, setNow] = React.useState(() => new Date());
+  // Yesterday's doses recorded from Earlier stay there while the screen is open, so the row and its
+  // Undo do not jump away.
+  const [kept, setKept] = React.useState<ReadonlySet<string>>(() => new Set());
   const logging = React.useRef(new Set<string>());
+  const mark = useMarkDose();
 
   // Refresh due states every minute while the screen is open
   React.useEffect(() => {
@@ -65,6 +112,12 @@ export function MedsScreen() {
   }, []);
 
   const checklist = checklistDoses(schedules, doses, now);
+  // Yesterday's doses that were never checked off. Last night's late doses are on the checklist
+  // until their window closes, then they move here.
+  const yesterday = new Date(now.getFullYear(), now.getMonth(), now.getDate() - 1);
+  const earlier = dosesForDay(schedules, doses, now, yesterday).filter(
+    s => s.state === 'overdue' || kept.has(rowId(s)),
+  );
   const asNeeded = schedules.filter(s => s.isActive && s.frequency === 'as-needed');
   const todayKey = localDateKey(now);
   const asNeededToday = doses.filter(
@@ -75,26 +128,13 @@ export function MedsScreen() {
       asNeeded.some(s => s.id === d.scheduleId),
   );
 
-  const mark = async (slot: DoseSlot, status: 'taken' | 'skipped') => {
-    try {
-      await db.saveDose({
-        id: slot.record?.id ?? newId(),
-        scheduleId: slot.schedule.id,
-        medicationName: slot.schedule.medicationName,
-        scheduledTime: slot.key,
-        status,
-        takenTime: status === 'taken' ? new Date().toISOString() : undefined,
-      });
-      toast.success(
-        status === 'taken' ? `${slot.schedule.medicationName} marked taken` : `${slot.schedule.medicationName} skipped`,
-      );
-    } catch (e) {
-      toast.error(errorMessage(e));
-    }
-  };
-
   const undo = async (slot: DoseSlot) => {
     if (slot.record) await db.deleteDose(slot.record.id);
+  };
+
+  const markEarlier = (slot: DoseSlot, status: 'taken' | 'skipped') => {
+    setKept(set => new Set(set).add(rowId(slot)));
+    return mark(slot, status);
   };
 
   const logAsNeeded = async (s: MedicationSchedule) => {
@@ -122,6 +162,8 @@ export function MedsScreen() {
       logging.current.delete(s.id);
     }
   };
+
+  const reviewed = reviewing && (schedules.find(s => s.id === reviewing.id) ?? reviewing);
 
   return (
     <div>
@@ -155,63 +197,33 @@ export function MedsScreen() {
               const day = slot.key.slice(0, 10);
               const label = day < todayKey ? 'Last night' : day > todayKey ? 'Tonight' : STATE_LABELS[slot.state];
               return (
-                <div
-                  key={`${slot.schedule.id}-${slot.key}`}
-                  role="group"
-                  aria-label={[`${slot.schedule.medicationName} ${fmtTime(slot.time)}`, label]
-                    .filter(Boolean)
-                    .join(', ')}
-                  className="flex items-center gap-3 px-4 py-3"
-                >
-                  <div className="w-16 shrink-0">
-                    <p className="text-sm font-semibold text-fg tabular-nums">{fmtTime(slot.time)}</p>
-                    <p
-                      className={cn(
-                        'text-[12px]',
-                        slot.state === 'overdue' ? 'text-warn font-semibold' : 'text-subtle',
-                      )}
-                    >
-                      {label}
-                    </p>
-                  </div>
-                  <div className="flex-1 min-w-0">
-                    <p className="font-medium text-fg truncate">{slot.schedule.medicationName}</p>
-                    <p className="text-sm text-muted truncate">{slot.schedule.dosage}</p>
-                  </div>
-                  {slot.state === 'taken' || slot.state === 'skipped' ? (
-                    <button
-                      type="button"
-                      onClick={() => undo(slot)}
-                      className={cn(
-                        'rounded-full px-3 h-9 text-sm font-semibold',
-                        slot.state === 'taken' ? 'bg-ok-soft text-ok' : 'bg-surface-2 text-muted',
-                      )}
-                      aria-label={`${slot.state === 'taken' ? 'Taken' : 'Skipped'}. Tap to undo.`}
-                    >
-                      {slot.state === 'taken' ? (
-                        <span className="flex items-center gap-1">
-                          <Check className="size-4" aria-hidden /> Taken
-                        </span>
-                      ) : (
-                        'Skipped'
-                      )}
-                    </button>
-                  ) : (
-                    <div className="flex gap-1.5 shrink-0">
-                      {/* A dose that was never due cannot be skipped, but one taken anyway can be recorded. */}
-                      {slot.state !== 'untracked' && (
-                        <Button size="sm" variant="quiet" onClick={() => mark(slot, 'skipped')}>
-                          Skip
-                        </Button>
-                      )}
-                      <Button size="sm" onClick={() => mark(slot, 'taken')}>
-                        Take
-                      </Button>
-                    </div>
-                  )}
-                </div>
+                <DoseRow
+                  key={rowId(slot)}
+                  slot={slot}
+                  label={label}
+                  onMark={status => mark(slot, status)}
+                  onUndo={() => undo(slot)}
+                />
               );
             })}
+          </Card>
+        </>
+      )}
+
+      {earlier.length > 0 && (
+        <>
+          <SectionTitle>Earlier</SectionTitle>
+          <Card className="divide-y divide-line">
+            {earlier.map(slot => (
+              <DoseRow
+                key={rowId(slot)}
+                slot={slot}
+                label="Yesterday"
+                past
+                onMark={status => markEarlier(slot, status)}
+                onUndo={() => undo(slot)}
+              />
+            ))}
           </Card>
         </>
       )}
@@ -267,7 +279,19 @@ export function MedsScreen() {
                         : s.frequency === 'as-needed'
                           ? 'As needed'
                           : s.scheduleTimes.map(fmtTime).join(', ')}
-                      {a.percent != null ? ` · ${a.percent}% taken in 30 days` : ''}
+                      {a.percent != null && (
+                        <>
+                          {' · '}
+                          <button
+                            type="button"
+                            onClick={() => setReviewing(s)}
+                            className="font-medium text-accent-ink hover:underline"
+                            aria-label={`${a.percent}% taken in 30 days. Show or change doses.`}
+                          >
+                            {a.percent}% taken in 30 days
+                          </button>
+                        </>
+                      )}
                     </p>
                   </div>
                   <Button
@@ -296,7 +320,80 @@ export function MedsScreen() {
           onClose={() => setEditing(null)}
         />
       )}
-      {reviewing && <DoseListSheet schedule={reviewing} onClose={() => setReviewing(null)} />}
+      {reviewed && <DoseListSheet schedule={reviewed} onClose={() => setReviewing(null)} />}
+    </div>
+  );
+}
+
+/**
+ * A dose on the checklist. `past` is for doses whose time has gone, which are recorded rather than
+ * taken now, so the buttons say what happened.
+ */
+function DoseRow({
+  slot,
+  label,
+  past = false,
+  onMark,
+  onUndo,
+}: {
+  slot: DoseSlot;
+  label: string;
+  past?: boolean;
+  onMark: (status: 'taken' | 'skipped') => void;
+  onUndo: () => void;
+}) {
+  const recorded = slot.state === 'taken' || slot.state === 'skipped';
+  return (
+    <div
+      role="group"
+      aria-label={[`${slot.schedule.medicationName} ${fmtTime(slot.time)}`, label].filter(Boolean).join(', ')}
+      className="flex items-center gap-3 px-4 py-3"
+    >
+      <div className="w-16 shrink-0">
+        <p className="text-sm font-semibold text-fg tabular-nums">{fmtTime(slot.time)}</p>
+        <p className={cn('text-[12px]', slot.state === 'overdue' && !past ? 'text-warn font-semibold' : 'text-subtle')}>
+          {label}
+        </p>
+      </div>
+      <div className="flex-1 min-w-0">
+        <p className="font-medium text-fg truncate">{slot.schedule.medicationName}</p>
+        <p className="text-sm text-muted truncate">{slot.schedule.dosage}</p>
+      </div>
+      {recorded ? (
+        <button
+          type="button"
+          onClick={onUndo}
+          className={cn(
+            'rounded-full px-3 h-9 text-sm font-semibold',
+            slot.state === 'taken' ? 'bg-ok-soft text-ok' : 'bg-surface-2 text-muted',
+          )}
+          aria-label={`${slot.state === 'taken' ? 'Taken' : 'Skipped'}. Tap to undo.`}
+        >
+          {slot.state === 'taken' ? (
+            <span className="flex items-center gap-1">
+              <Check className="size-4" aria-hidden /> Taken
+            </span>
+          ) : (
+            'Skipped'
+          )}
+        </button>
+      ) : (
+        <div className="flex gap-1.5 shrink-0">
+          {/* A dose that was never due cannot be skipped, but one taken anyway can be recorded. */}
+          {slot.state !== 'untracked' && (
+            <Button size="sm" variant="quiet" onClick={() => onMark('skipped')}>
+              {past ? 'Skipped' : 'Skip'}
+            </Button>
+          )}
+          <Button
+            size="sm"
+            variant={slot.state === 'untracked' ? 'secondary' : 'primary'}
+            onClick={() => onMark('taken')}
+          >
+            {past ? 'Taken' : 'Take'}
+          </Button>
+        </div>
+      )}
     </div>
   );
 }
@@ -445,9 +542,10 @@ function MedicationSheet({
             placeholder="With food"
           />
         </div>
-        {schedule && hasDoses && (
+        {/* Scheduled doses from the last week can be recorded here even when none were logged */}
+        {schedule && (hasDoses || schedule.frequency !== 'as-needed') && (
           <Button variant="secondary" block onClick={() => setShowDoses(true)}>
-            <History /> Logged doses
+            <History /> Dose history
           </Button>
         )}
         {schedule && (
@@ -495,7 +593,7 @@ const STATUS_WORDS: Record<MedicationAdherence['status'], string> = {
 
 /** What the list shows for a dose, and how its buttons name it. */
 function describeDose(d: MedicationAdherence, at: Date): { text: string; name: string } {
-  const clock = at.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
+  const clock = fmtClock(at);
   // As-needed doses are always taken. Doses the old app recorded have a different key and can be skipped.
   if (!isSlotKey(d.scheduledTime) && d.status === 'taken') {
     return { text: `Taken at ${clock}`, name: `the dose taken at ${clock}` };
@@ -504,17 +602,34 @@ function describeDose(d: MedicationAdherence, at: Date): { text: string; name: s
 }
 
 function dayHeading(dayKey: string, now: Date): string {
-  const yesterday = new Date(now.getFullYear(), now.getMonth(), now.getDate() - 1);
-  if (dayKey === localDateKey(now)) return 'Today';
-  if (dayKey === localDateKey(yesterday)) return 'Yesterday';
+  const day = (n: number) => localDateKey(new Date(now.getFullYear(), now.getMonth(), now.getDate() + n));
+  if (dayKey === day(0)) return 'Today';
+  if (dayKey === day(-1)) return 'Yesterday';
+  if (dayKey === day(1)) return 'Tomorrow';
   const [y, m, d] = dayKey.split('-').map(Number);
   return new Date(y, m - 1, d).toLocaleDateString([], { weekday: 'short', month: 'short', day: 'numeric' });
 }
 
+type Choice = 'taken' | 'skipped' | 'none';
+
+const CHOICES: { value: Choice; label: string }[] = [
+  { value: 'taken', label: 'Taken' },
+  { value: 'skipped', label: 'Skipped' },
+  { value: 'none', label: 'Not taken' },
+];
+
+const choiceOf = (slot: DoseSlot): Choice =>
+  slot.record?.status === 'taken' ? 'taken' : slot.record?.status === 'skipped' ? 'skipped' : 'none';
+
+const pad = (n: number) => String(n).padStart(2, '0');
+const hhmm = (d: Date) => `${pad(d.getHours())}:${pad(d.getMinutes())}`;
+
 /**
- * Every logged dose of one medication, newest first, so a dose logged by mistake can be removed
- * later. A removed dose stays in the list with Undo until the sheet closes. A toast would not do,
- * because nothing outside an open sheet can be reached.
+ * Every dose of one medication, newest first. Scheduled doses from the last week can be set to
+ * taken, skipped or not taken, and the time a dose was taken can be corrected. Older doses, and
+ * doses that were not due, can be removed, so a dose logged by mistake can be taken out later. A
+ * removed dose stays in the list with Undo until the sheet closes. A toast would not do, because
+ * nothing outside an open sheet can be reached.
  */
 function DoseListSheet({ schedule, onClose }: { schedule: MedicationSchedule; onClose: () => void }) {
   const { doses } = useHealthData();
@@ -525,9 +640,14 @@ function DoseListSheet({ schedule, onClose }: { schedule: MedicationSchedule; on
   const [changed, setChanged] = React.useState<ReadonlyMap<string, { dose: MedicationAdherence; removed: boolean }>>(
     () => new Map(),
   );
+  const saving = React.useRef(new Set<string>());
   const now = new Date();
+  const scheduled = schedule.frequency !== 'as-needed';
 
-  const rows = React.useMemo(() => {
+  // Doses that count from the last week, each with its record if it has one
+  const slots = recentDoses(schedule, doses, now);
+  const onSlots = new Set(slots.map(s => s.record?.id));
+  const records = React.useMemo(() => {
     const here = doses.filter(d => d.scheduleId === schedule.id);
     const ids = new Set(here.map(d => d.id));
     const kept = [...changed.values()].filter(c => !ids.has(c.dose.id)).map(c => c.dose);
@@ -536,14 +656,18 @@ function DoseListSheet({ schedule, onClose }: { schedule: MedicationSchedule; on
       .filter(r => !Number.isNaN(r.at.getTime()))
       .sort((a, b) => b.at.getTime() - a.at.getTime());
   }, [doses, changed, schedule.id]);
-  const groups = React.useMemo(() => {
-    const map = new Map<string, typeof rows>();
-    for (const r of rows.slice(0, limit)) {
-      const key = localDateKey(r.at);
-      map.set(key, [...(map.get(key) ?? []), r]);
-    }
-    return [...map.entries()];
-  }, [rows, limit]);
+  const others = records.filter(r => !onSlots.has(r.d.id));
+
+  type Row = { kind: 'slot'; slot: DoseSlot; at: Date } | { kind: 'record'; d: MedicationAdherence; at: Date };
+  const groups = new Map<string, Row[]>();
+  const rows: Row[] = [
+    ...slots.map(slot => ({ kind: 'slot' as const, slot, at: slot.due })),
+    ...others.slice(0, limit).map(r => ({ kind: 'record' as const, ...r })),
+  ].sort((a, b) => b.at.getTime() - a.at.getTime());
+  for (const row of rows) {
+    const key = row.kind === 'slot' ? row.slot.key.slice(0, 10) : localDateKey(row.at);
+    groups.set(key, [...(groups.get(key) ?? []), row]);
+  }
 
   const isRemoved = (d: MedicationAdherence) => changed.get(d.id)?.removed === true;
   const note = (dose: MedicationAdherence, removed: boolean) =>
@@ -567,43 +691,89 @@ function DoseListSheet({ schedule, onClose }: { schedule: MedicationSchedule; on
     }
   };
 
+  /** Sets a scheduled dose to taken, skipped or not taken. */
+  const choose = async (slot: DoseSlot, choice: Choice) => {
+    if (choice === choiceOf(slot) || saving.current.has(slot.key)) return;
+    saving.current.add(slot.key);
+    try {
+      if (choice === 'none') {
+        if (slot.record) await db.deleteDose(slot.record.id);
+      } else {
+        await db.saveDose(doseRecord(slot, choice, newId(), new Date()));
+      }
+    } catch (e) {
+      toast.error(errorMessage(e));
+    } finally {
+      saving.current.delete(slot.key);
+    }
+  };
+
+  /** Corrects when a taken dose was taken. */
+  const setTime = async (slot: DoseSlot, when: Date) => {
+    if (slot.record?.status !== 'taken' || when.toISOString() === slot.record.takenTime) return;
+    try {
+      await db.saveDose({ ...slot.record, takenTime: when.toISOString() });
+    } catch (e) {
+      toast.error(errorMessage(e));
+    }
+  };
+
   return (
     <Sheet
       open
       onOpenChange={o => !o && onClose()}
       title={`${schedule.medicationName} doses`}
-      description="Remove a dose that was logged by mistake."
+      description={
+        scheduled
+          ? `Record or change any dose from the last ${RECENT_DAYS} days, or remove one logged by mistake.`
+          : 'Remove a dose that was logged by mistake.'
+      }
     >
       {rows.length === 0 ? (
-        <p className="text-sm text-muted">No doses logged.</p>
+        <p className="text-sm text-muted">{scheduled ? 'No doses due yet.' : 'No doses logged.'}</p>
       ) : (
         <div className="space-y-5">
-          {groups.map(([day, items]) => (
-            <section key={day}>
-              <h3 className="text-sm font-semibold text-muted mb-2">{dayHeading(day, now)}</h3>
-              <Card className="divide-y divide-line">
-                {items.map(({ d, at }) => {
-                  const { text, name } = describeDose(d, at);
-                  const gone = isRemoved(d);
-                  return (
-                    <div key={d.id} className="flex items-center gap-3 px-4 py-2">
-                      <p className={cn('flex-1 min-w-0', gone ? 'text-subtle line-through' : 'text-fg')}>{text}</p>
-                      {gone && <span className="text-sm text-subtle">Removed</span>}
-                      <Button
-                        size="sm"
-                        variant="quiet"
-                        onClick={() => (gone ? putBack(d) : remove(d))}
-                        aria-label={gone ? `Undo removing ${name}` : `Remove ${name}`}
-                      >
-                        {gone ? 'Undo' : 'Remove'}
-                      </Button>
-                    </div>
-                  );
-                })}
-              </Card>
-            </section>
-          ))}
-          {rows.length > limit && (
+          {[...groups.entries()].map(([day, items]) => {
+            const heading = dayHeading(day, now);
+            return (
+              <section key={day}>
+                <h3 className="text-sm font-semibold text-muted mb-2">{heading}</h3>
+                <Card className="divide-y divide-line">
+                  {items.map(row => {
+                    if (row.kind === 'slot') {
+                      return (
+                        <SlotRow
+                          key={row.slot.key}
+                          slot={row.slot}
+                          heading={heading}
+                          onChoose={choice => choose(row.slot, choice)}
+                          onTime={when => setTime(row.slot, when)}
+                        />
+                      );
+                    }
+                    const { d, at } = row;
+                    const { text, name } = describeDose(d, at);
+                    const gone = isRemoved(d);
+                    return (
+                      <div key={d.id} className="flex items-center gap-3 px-4 py-2">
+                        <p className={cn('flex-1 min-w-0', gone ? 'text-subtle line-through' : 'text-fg')}>{text}</p>
+                        {gone && <span className="text-sm text-subtle">Removed</span>}
+                        <Button
+                          size="sm"
+                          variant="quiet"
+                          onClick={() => (gone ? putBack(d) : remove(d))}
+                          aria-label={gone ? `Undo removing ${name}` : `Remove ${name}`}
+                        >
+                          {gone ? 'Undo' : 'Remove'}
+                        </Button>
+                      </div>
+                    );
+                  })}
+                </Card>
+              </section>
+            );
+          })}
+          {others.length > limit && (
             <Button variant="secondary" block onClick={() => setLimit(l => l + PAGE)}>
               Show older doses
             </Button>
@@ -611,5 +781,95 @@ function DoseListSheet({ schedule, onClose }: { schedule: MedicationSchedule; on
         </div>
       )}
     </Sheet>
+  );
+}
+
+/** A scheduled dose in the dose list, which can be set to taken, skipped or not taken. */
+function SlotRow({
+  slot,
+  heading,
+  onChoose,
+  onTime,
+}: {
+  slot: DoseSlot;
+  heading: string;
+  onChoose: (choice: Choice) => void;
+  onTime: (when: Date) => void;
+}) {
+  const clock = fmtTime(slot.time);
+  const choice = choiceOf(slot);
+  const status = choice !== 'none' ? '' : slot.state === 'overdue' ? 'Missed' : slot.state === 'due' ? 'Due now' : '';
+  return (
+    <div className="px-4 py-2.5">
+      <div className="flex items-center gap-3">
+        <div className="w-16 shrink-0">
+          <p className="text-sm font-semibold text-fg tabular-nums">{clock}</p>
+          {status && (
+            <p className={cn('text-[12px]', status === 'Missed' ? 'text-warn font-semibold' : 'text-subtle')}>
+              {status}
+            </p>
+          )}
+        </div>
+        <div className="flex-1 min-w-0">
+          <Segmented<Choice> label={`${clock} dose, ${heading}`} value={choice} onChange={onChoose} options={CHOICES} />
+        </div>
+      </div>
+      {choice === 'taken' && slot.record && (
+        <TakenTime
+          due={slot.due}
+          // A dose ticked without a time was taken when it was due
+          value={hhmm(slot.record.takenTime ? new Date(slot.record.takenTime) : slot.due)}
+          label={`Taken at, ${clock} dose, ${heading}`}
+          onChange={onTime}
+        />
+      )}
+    </div>
+  );
+}
+
+/**
+ * The time a dose was taken, read on the day nearest to when it was due. Each whole time is saved
+ * as it is entered. A time that has not come yet is not saved, and leaving the field puts back the
+ * saved time.
+ */
+function TakenTime({
+  due,
+  value,
+  label,
+  onChange,
+}: {
+  due: Date;
+  value: string;
+  label: string;
+  onChange: (when: Date) => void;
+}) {
+  const [text, setText] = React.useState(value);
+  React.useEffect(() => setText(value), [value]);
+  const read = (time: string) => {
+    const when = takenAt(due, time);
+    return when && when.getTime() <= Date.now() + 5 * 60_000 ? when : null;
+  };
+  return (
+    <div className="mt-1 flex items-center gap-2 pl-[4.75rem]">
+      <span className="text-[13px] text-muted" aria-hidden>
+        Taken at
+      </span>
+      <Input
+        type="time"
+        aria-label={label}
+        value={text}
+        className="h-8 w-[8.75rem] rounded-lg px-2 text-[13px]"
+        onChange={e => {
+          setText(e.target.value);
+          const when = read(e.target.value);
+          if (when) onChange(when);
+        }}
+        onBlur={() => {
+          if (text === value || (text && read(text))) return;
+          if (text) toast.error('That time is in the future');
+          setText(value);
+        }}
+      />
+    </div>
   );
 }

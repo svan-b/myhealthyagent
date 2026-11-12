@@ -81,6 +81,16 @@ function readStore<T>(page: Page, store: 'schedules' | 'adherence') {
   }, store) as Promise<T[]>;
 }
 
+/** The 30 day figure in Your medications, which opens the medication's doses. */
+const adherenceLink = (page: Page, percent: number) =>
+  page.getByRole('button', { name: `${percent}% taken in 30 days. Show or change doses.` });
+
+interface Dose {
+  scheduledTime: string;
+  status: string;
+  takenTime?: string;
+}
+
 test('a late evening dose can still be checked off after midnight', async ({ page }) => {
   const errors = watchErrors(page);
   await page.clock.setFixedTime(newYork('2026-11-12T00:10'));
@@ -110,7 +120,7 @@ test('a medication added in the afternoon does not call its morning dose overdue
   await sheet.getByRole('button', { name: 'Save' }).click();
   await expect(page.getByText('Medication added')).toBeVisible();
 
-  const morning = page.getByRole('group', { name: /^Amoxicillin 8:00\sAM$/ });
+  const morning = page.getByRole('group', { name: /^Amoxicillin 8:00\sAM, Not due$/ });
   await expect(morning.getByRole('button', { name: 'Take', exact: true })).toBeVisible();
   await expect(morning.getByRole('button', { name: 'Skip' })).toHaveCount(0);
   await expect(page.getByRole('main').getByText('Overdue')).toHaveCount(0);
@@ -130,7 +140,7 @@ test('moving a dose time after taking the dose keeps it taken', async ({ page })
     schedules: [schedule('m1', 'Metformin', ['08:00', '20:00'])],
     doses: taken('m1', 'Metformin', [...keys, '2026-11-12T08:00']),
   });
-  await expect(page.getByText(/100% taken in 30 days/)).toBeVisible();
+  await expect(adherenceLink(page, 100)).toBeVisible();
 
   await page.getByRole('button', { name: 'Edit Metformin' }).click();
   const sheet = page.getByRole('dialog', { name: 'Edit medication' });
@@ -141,7 +151,7 @@ test('moving a dose time after taking the dose keeps it taken', async ({ page })
   const moved = page.getByRole('group', { name: /^Metformin 8:30\sAM/ });
   await expect(moved.getByRole('button', { name: /Taken. Tap to undo/ })).toBeVisible();
   await expect(moved.getByRole('button', { name: 'Take', exact: true })).toHaveCount(0);
-  await expect(page.getByText(/100% taken in 30 days/)).toBeVisible();
+  await expect(adherenceLink(page, 100)).toBeVisible();
   const [saved] = await readStore<{ timesHistory?: unknown[] }>(page, 'schedules');
   expect(saved.timesHistory).toHaveLength(1);
   expect(errors).toEqual([]);
@@ -153,7 +163,7 @@ test('pausing and resuming keeps the adherence from before the pause', async ({ 
   const sertraline = schedule('s1', 'Sertraline', ['08:00']);
   const keys = Array.from({ length: 31 }, (_, i) => `${daysBefore('2026-11-09', i)}T08:00`);
   await openWith(page, { schedules: [sertraline], doses: taken('s1', 'Sertraline', keys) });
-  await expect(page.getByText(/100% taken in 30 days/)).toBeVisible();
+  await expect(adherenceLink(page, 100)).toBeVisible();
 
   await page.getByRole('button', { name: 'Edit Sertraline' }).click();
   await page.getByRole('dialog', { name: 'Edit medication' }).getByRole('button', { name: 'Pause' }).click();
@@ -169,7 +179,7 @@ test('pausing and resuming keeps the adherence from before the pause', async ({ 
   await expect(page.getByText('Resumed')).toBeVisible();
 
   // This morning's dose fell during the pause, so it is neither overdue nor counted
-  const morning = page.getByRole('group', { name: /^Sertraline 8:00\sAM$/ });
+  const morning = page.getByRole('group', { name: /^Sertraline 8:00\sAM, Not due$/ });
   await expect(morning.getByRole('button', { name: 'Skip' })).toHaveCount(0);
   await expect(page.getByRole('main').getByText('Overdue')).toHaveCount(0);
   await expect(page.getByText(/^8:00\sAM · 100% taken in 30 days$/)).toBeVisible();
@@ -215,7 +225,7 @@ test('an as-needed dose logged by mistake can be removed later', async ({ page }
 
   // Doses stay reachable from the medication's edit sheet, also on later days
   await page.getByRole('button', { name: 'Edit Ibuprofen' }).click();
-  await page.getByRole('dialog', { name: 'Edit medication' }).getByRole('button', { name: 'Logged doses' }).click();
+  await page.getByRole('dialog', { name: 'Edit medication' }).getByRole('button', { name: 'Dose history' }).click();
   await expect(
     page.getByRole('dialog', { name: 'Ibuprofen doses' }).getByRole('button', { name: /^Remove the dose/ }),
   ).toHaveCount(1);
@@ -242,7 +252,7 @@ async function openWithIbuprofen(page: Page) {
 async function openDoseList(page: Page) {
   await openWithIbuprofen(page);
   await page.getByRole('button', { name: 'Edit Ibuprofen' }).click();
-  await page.getByRole('dialog', { name: 'Edit medication' }).getByRole('button', { name: 'Logged doses' }).click();
+  await page.getByRole('dialog', { name: 'Edit medication' }).getByRole('button', { name: 'Dose history' }).click();
   const list = page.getByRole('dialog', { name: 'Ibuprofen doses' });
   await expect(list.getByRole('button', { name: /^Remove the dose taken at/ })).toHaveCount(2);
   return list;
@@ -270,7 +280,7 @@ test('looking at logged doses keeps changes in the edit sheet that are not saved
   await page.getByRole('button', { name: 'Edit Ibuprofen' }).click();
   const edit = page.getByRole('dialog', { name: 'Edit medication' });
   await edit.getByLabel('Dose', { exact: true }).fill('400 mg');
-  await edit.getByRole('button', { name: 'Logged doses' }).click();
+  await edit.getByRole('button', { name: 'Dose history' }).click();
   await page.getByRole('dialog', { name: 'Ibuprofen doses' }).getByRole('button', { name: 'Close' }).click();
 
   // The edit sheet is still open with the new dose, and saving it keeps the dose
@@ -300,7 +310,7 @@ test('doses the old app recorded are listed with their status', async ({ page })
     ],
   });
   await page.getByRole('button', { name: 'Edit Metformin' }).click();
-  await page.getByRole('dialog', { name: 'Edit medication' }).getByRole('button', { name: 'Logged doses' }).click();
+  await page.getByRole('dialog', { name: 'Edit medication' }).getByRole('button', { name: 'Dose history' }).click();
   const list = page.getByRole('dialog', { name: 'Metformin doses' });
   await expect(list.getByText(/^8:00\sAM dose, skipped$/)).toBeVisible();
   await expect(list.getByText(/^Taken at 8:05\sAM$/)).toBeVisible();
@@ -320,5 +330,165 @@ test('putting back a removed dose keeps focus on that dose', async ({ page }) =>
   await expect.poll(() => doseCount(page)).toBe(2);
   await expect(list.getByText('Removed')).toHaveCount(0);
   await expect(list.getByRole('button', { name: /^Remove the dose taken at 2:00\sPM$/ })).toBeFocused();
+  expect(errors).toEqual([]);
+});
+
+test('last night’s dose can be recorded the next morning, at the time it was due', async ({ page }) => {
+  const errors = watchErrors(page);
+  await page.clock.setFixedTime(newYork('2026-11-12T07:30'));
+  // Every night for a month was checked off, except last night's dose, which was taken but not ticked
+  const nights = Array.from({ length: 30 }, (_, i) => `${daysBefore('2026-11-12', i + 2)}T22:00`);
+  await openWith(page, {
+    schedules: [schedule('q1', 'Quetiapine', ['22:00'])],
+    doses: taken('q1', 'Quetiapine', nights),
+  });
+  await expect(adherenceLink(page, 97)).toBeVisible();
+  await expect(page.getByRole('group', { name: /^Quetiapine 10:00\sPM, Later$/ })).toBeVisible();
+
+  const yesterday = page.getByRole('group', { name: /^Quetiapine 10:00\sPM, Yesterday$/ });
+  await expect(yesterday.getByRole('button', { name: 'Skipped', exact: true })).toBeVisible();
+  await yesterday.getByRole('button', { name: 'Taken', exact: true }).click();
+  await expect(page.getByText(/^Quetiapine marked taken at 10:00\sPM$/)).toBeVisible();
+  await expect(yesterday.getByRole('button', { name: /Taken. Tap to undo/ })).toBeVisible();
+  await expect(adherenceLink(page, 100)).toBeVisible();
+  // Recorded for last night's slot, at 10 PM last night, not at 7:30 this morning
+  const lastNight = async () =>
+    (await readStore<Dose>(page, 'adherence')).find(d => d.scheduledTime === '2026-11-11T22:00');
+  expect(await lastNight()).toMatchObject({ status: 'taken', takenTime: '2026-11-12T03:00:00.000Z' });
+
+  // The row stays, so it can be undone
+  await yesterday.getByRole('button', { name: /Taken. Tap to undo/ }).click();
+  await expect(yesterday.getByRole('button', { name: 'Taken', exact: true })).toBeVisible();
+  await expect.poll(lastNight).toBeUndefined();
+  await expect(adherenceLink(page, 97)).toBeVisible();
+  expect(errors).toEqual([]);
+});
+
+test('any dose from the last week can be recorded or changed in the dose list', async ({ page }) => {
+  const errors = watchErrors(page);
+  await page.clock.setFixedTime(newYork('2026-11-12T12:00'));
+  // Twice a day since Nov 2, all checked off except Monday evening's dose
+  const keys = Array.from({ length: 10 }, (_, i) => daysBefore('2026-11-12', i + 1))
+    .flatMap(day => [`${day}T08:00`, `${day}T20:00`])
+    .filter(key => key !== '2026-11-09T20:00');
+  await openWith(page, {
+    schedules: [schedule('m1', 'Metformin', ['08:00', '20:00'], { startDate: '2026-11-02T13:00:00.000Z' })],
+    doses: taken('m1', 'Metformin', [...keys, '2026-11-12T08:00']),
+  });
+  await adherenceLink(page, 95).click();
+  const list = page.getByRole('dialog', { name: 'Metformin doses' });
+  const monday = list.getByRole('radiogroup', { name: /^8:00\sPM dose, Mon, Nov 9$/ });
+  await expect(monday.getByRole('radio', { name: 'Not taken' })).toHaveAttribute('aria-checked', 'true');
+  await expect(list.getByText('Missed', { exact: true })).toHaveCount(1);
+
+  const saved = async () =>
+    (await readStore<Dose>(page, 'adherence')).find(d => d.scheduledTime === '2026-11-09T20:00');
+  await monday.getByRole('radio', { name: 'Taken', exact: true }).click();
+  await expect(monday.getByRole('radio', { name: 'Taken', exact: true })).toHaveAttribute('aria-checked', 'true');
+  // Recorded at the time it was due, 8 PM in New York
+  await expect.poll(saved).toMatchObject({ status: 'taken', takenTime: '2026-11-10T01:00:00.000Z' });
+
+  // The time it was really taken can be set, also after midnight
+  const time = list.getByLabel(/^Taken at, 8:00\sPM dose, Mon, Nov 9$/);
+  await time.fill('21:30');
+  await expect.poll(saved).toMatchObject({ takenTime: '2026-11-10T02:30:00.000Z' });
+  await time.fill('00:15');
+  await expect.poll(saved).toMatchObject({ takenTime: '2026-11-10T05:15:00.000Z' });
+
+  await monday.getByRole('radio', { name: 'Skipped' }).click();
+  await expect.poll(saved).toMatchObject({ status: 'skipped' });
+  expect((await saved())?.takenTime).toBeUndefined();
+  await monday.getByRole('radio', { name: 'Not taken' }).click();
+  await expect.poll(saved).toBeUndefined();
+
+  // A time that has not come yet is not saved
+  const today = list.getByLabel(/^Taken at, 8:00\sAM dose, Today$/);
+  await expect(today).toHaveValue('08:00');
+  await today.fill('13:00');
+  await today.blur();
+  await expect(page.getByText('That time is in the future')).toBeVisible();
+  await expect(today).toHaveValue('08:00');
+  const todays = (await readStore<Dose>(page, 'adherence')).find(d => d.scheduledTime === '2026-11-12T08:00');
+  expect(todays?.takenTime).toBeUndefined();
+
+  // Only the last week can be changed. Older doses can still be removed.
+  await expect(list.getByRole('radiogroup', { name: /, Thu, Nov 5$/ })).toHaveCount(2);
+  await expect(list.getByRole('radiogroup', { name: /, Wed, Nov 4$/ })).toHaveCount(0);
+  await expect(list.getByRole('button', { name: /^Remove the 8:00\s[AP]M dose, taken$/ })).toHaveCount(6);
+  await list.getByRole('button', { name: 'Close' }).click();
+  await expect(adherenceLink(page, 95)).toBeVisible();
+  expect(errors).toEqual([]);
+});
+
+test('a bedtime dose moved past midnight right after it was taken is not offered again', async ({ page }) => {
+  const errors = watchErrors(page);
+  await page.clock.setFixedTime(newYork('2026-11-12T23:05'));
+  await openWith(page, { schedules: [schedule('q1', 'Quetiapine', ['23:00'])] });
+  const dueNow = page.getByRole('group', { name: /^Quetiapine 11:00\sPM, Due now$/ });
+  await dueNow.getByRole('button', { name: 'Take', exact: true }).click();
+  await expect(
+    page.getByRole('group', { name: /^Quetiapine 11:00\sPM$/ }).getByRole('button', { name: /Taken. Tap to undo/ }),
+  ).toBeVisible();
+
+  await page.clock.setFixedTime(newYork('2026-11-12T23:10'));
+  await page.getByRole('button', { name: 'Edit Quetiapine' }).click();
+  const sheet = page.getByRole('dialog', { name: 'Edit medication' });
+  await sheet.getByLabel('Dose 1 time').fill('00:30');
+  await sheet.getByRole('button', { name: 'Save' }).click();
+  await expect(page.getByText('Medication updated')).toBeVisible();
+
+  // Tonight's 12:30 AM dose is the one just taken, before and after its window opens
+  for (const now of ['2026-11-12T23:10', '2026-11-12T23:45']) {
+    await page.clock.setFixedTime(newYork(now));
+    await page.reload();
+    await openTab(page, 'Meds');
+    const tonight = page.getByRole('group', { name: /^Quetiapine 12:30\sAM, Tonight$/ });
+    await expect(tonight.getByRole('button', { name: /Taken. Tap to undo/ })).toBeVisible();
+    // Nothing else offers a 12:30 AM dose, also not this morning's, which was not in the schedule then
+    await expect(page.getByRole('group', { name: /^Quetiapine 12:30\sAM/ })).toHaveCount(1);
+    await expect(page.getByRole('main').getByRole('button', { name: 'Take', exact: true })).toHaveCount(0);
+    await expect(page.getByRole('main').getByText(/^(Due now|Overdue)$/)).toHaveCount(0);
+  }
+  const doses = await readStore<Dose>(page, 'adherence');
+  expect(doses.map(d => [d.scheduledTime, d.status])).toEqual([['2026-11-12T23:00', 'taken']]);
+
+  // The next night's dose is due as usual
+  await page.clock.setFixedTime(newYork('2026-11-13T23:45'));
+  await page.reload();
+  await openTab(page, 'Meds');
+  await expect(
+    page
+      .getByRole('group', { name: /^Quetiapine 12:30\sAM, Tonight$/ })
+      .getByRole('button', { name: 'Take', exact: true }),
+  ).toBeVisible();
+  expect(errors).toEqual([]);
+});
+
+test('a dose taken before its time was dropped from the schedule stays listed and counted', async ({ page }) => {
+  const errors = watchErrors(page);
+  await page.clock.setFixedTime(newYork('2026-11-12T09:30'));
+  const keys = Array.from({ length: 30 }, (_, i) => daysBefore('2026-11-12', i + 1)).flatMap(day => [
+    `${day}T08:00`,
+    `${day}T20:00`,
+  ]);
+  await openWith(page, {
+    schedules: [schedule('m1', 'Metformin', ['08:00', '20:00'])],
+    doses: taken('m1', 'Metformin', [...keys, '2026-11-12T08:00']),
+  });
+
+  // From twice a day to once a day at 8 PM, after this morning's dose
+  await page.getByRole('button', { name: 'Edit Metformin' }).click();
+  const sheet = page.getByRole('dialog', { name: 'Edit medication' });
+  await sheet.getByLabel('How often').selectOption('daily');
+  await sheet.getByLabel('Dose 1 time').fill('20:00');
+  await sheet.getByRole('button', { name: 'Save' }).click();
+  await expect(page.getByText('Medication updated')).toBeVisible();
+
+  const morning = page.getByRole('group', { name: /^Metformin 8:00\sAM$/ });
+  await expect(morning.getByRole('button', { name: /Taken. Tap to undo/ })).toBeVisible();
+  await expect(
+    page.getByRole('group', { name: /^Metformin 8:00\sPM, Later$/ }).getByRole('button', { name: 'Take', exact: true }),
+  ).toBeVisible();
+  await expect(adherenceLink(page, 100)).toBeVisible();
   expect(errors).toEqual([]);
 });

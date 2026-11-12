@@ -1,11 +1,11 @@
 // lib/medication/doses.ts
-// Dose scheduling and adherence. Schedule times are local wall clock times, so a
-// dose due at 08:00 stays at 08:00 when the person travels or clocks change.
+// Dose scheduling and adherence. Schedule times are local wall clock times, so a dose due at 08:00
+// stays at 08:00 when the person travels or clocks change.
 //
 // How a schedule changes over time
 //
-// A slot is one scheduled dose, a local time on a local day. Its key is "yyyy-MM-ddTHH:mm",
-// and a dose record names its slot by that key.
+// A slot is one scheduled dose, a local time on a local day. Its key is "yyyy-MM-ddTHH:mm", and a
+// dose record names its slot by that key. A dose recorded late keeps the key of its slot.
 //
 // - startDate is when tracking started. It is set when the medication is added. For schedules
 //   from the old app, which could not record doses, it is the time of the upgrade or restore.
@@ -16,9 +16,18 @@
 //   the moment it was replaced. A day uses the version in effect at the end of that day, so an
 //   edit applies from the day it was made and earlier days keep the times they had.
 //
-// Records are matched to the slots of their own day. A record goes to the slot with its key. A
-// record whose time an edit removed goes to the nearest free slot that day whose time the edit
-// added, so a dose taken before its time was moved still shows as taken.
+// How records are matched to slots
+//
+// A record goes to the slot with its key. A record whose time an edit removed moves to the nearest
+// free slot whose time was not in the schedule along with the record's time, so a dose taken before
+// its time was moved still shows as taken and never lands on a dose that was due anyway. For each
+// such time it looks at one slot. When that time falls less than 6 hours away across midnight, it
+// is the same night's dose, as when a bedtime dose moves from 23:00 to 00:30, so the record looks
+// at that slot on the day before or after. Otherwise it looks at the slot on its own day. So a dose
+// taken just after midnight never takes the place of the next evening's dose. Distances are real
+// time between when the record and the slot were due, never when the dose was taken, so a morning
+// dose taken late cannot land on an afternoon slot. A record that finds no free slot stays at its
+// own time on its own day, so every record counts once and shows in that day's list.
 //
 // A slot with a record always counts. A slot with no record does not count, and is never shown as
 // due or overdue, when it fell before startDate, during a pause, or at a time that was not in the
@@ -30,6 +39,13 @@ const HOUR = 60 * 60_000;
 const DUE_FROM = HOUR;
 /** Two hours after its time, a dose with no record is overdue and counts as missed. */
 const MISSED_AFTER = 2 * HOUR;
+/** A record whose time an edit removed moves across midnight only to a slot less than this far away. */
+const NIGHT_REACH = 6 * HOUR;
+/** Days around the ones asked for that are matched too, so a record can move across midnight. */
+const MARGIN_DAYS = 2;
+
+/** Doses from today and this many days before it can be recorded or changed in the dose list. */
+export const RECENT_DAYS = 7;
 
 const pad = (n: number) => String(n).padStart(2, '0');
 
@@ -122,60 +138,90 @@ interface Slot {
 
 const statusRank = (r: MedicationAdherence) => (r.status === 'taken' ? 2 : r.status === 'skipped' ? 1 : 0);
 
+/** A schedule's slots on one local day, from the version in effect at the end of the day. */
+function daySlots(s: MedicationSchedule, versions: Version[], day: Date): Slot[] {
+  return versionAt(versions, addDays(day, 1).getTime() - 1).times.map(time => {
+    const key = dueKey(day, time);
+    const due = dueKeyToDate(key);
+    return { time, key, due, expected: inSchedule(s, versions, time, due.getTime()) };
+  });
+}
+
 /**
- * Attaches a day's records to its slots. A record goes to the slot with its key. A record whose
- * time is not a slot that day goes to the nearest free slot whose time was not in the schedule
- * while the record's time was, so it never lands on a dose that was due anyway.
+ * A schedule's slots on `count` local days from `first`, with its records attached as described at
+ * the top of this file. A record that found no slot gets a slot of its own on its day.
  */
-function attachRecords(slots: Slot[], records: MedicationAdherence[], dayVersions: Version[]) {
+function slotsBetween(
+  s: MedicationSchedule,
+  versions: Version[],
+  records: MedicationAdherence[],
+  first: Date,
+  count: number,
+): Slot[][] {
+  const days = Array.from({ length: Math.max(0, count) + 2 * MARGIN_DAYS }, (_, i) => addDays(first, i - MARGIN_DAYS));
+  const index = new Map(days.map((d, i) => [localDateKey(d), i]));
+  const slots = days.map(day => daySlots(s, versions, day));
+
   // One record per key. If a restore left two for the same dose, a taken record wins.
   const byKey = new Map<string, MedicationAdherence>();
   for (const r of records) {
+    if (r.scheduleId !== s.id || !isSlotKey(r.scheduledTime) || !index.has(r.scheduledTime.slice(0, 10))) continue;
     const current = byKey.get(r.scheduledTime);
     if (!current || statusRank(r) > statusRank(current)) byKey.set(r.scheduledTime, r);
   }
+  const slotByKey = new Map(slots.flat().map(x => [x.key, x]));
   const leftover: MedicationAdherence[] = [];
   for (const [key, r] of byKey) {
-    const slot = slots.find(x => x.key === key);
+    const slot = slotByKey.get(key);
     if (slot) slot.record = r;
     else leftover.push(r);
   }
-  const pairs: { r: MedicationAdherence; slot: Slot; distance: number }[] = [];
+
+  const pairs: { r: MedicationAdherence; slot: Slot; distance: number; otherDay: boolean }[] = [];
   for (const r of leftover) {
+    const i = index.get(r.scheduledTime.slice(0, 10))!;
     const time = r.scheduledTime.slice(11);
     const at = dueKeyToDate(r.scheduledTime).getTime();
-    // The latest version that day with the record's time. Without one (data saved before times
-    // were kept) any free slot that day may take the record.
-    const own = dayVersions.filter(v => v.times.includes(time)).pop();
-    for (const slot of slots) {
-      if (slot.record || own?.times.includes(slot.time)) continue;
-      pairs.push({ r, slot, distance: Math.abs(slot.due.getTime() - at) });
+    const near = (d: Date) => Math.abs(d.getTime() - at) < NIGHT_REACH;
+    // Whether a time falls near the record across midnight, so its slot on the record's day is not the one
+    const acrossMidnight = (t: string) => [-1, 1].some(n => near(dueKeyToDate(dueKey(addDays(days[i], n), t))));
+    // The latest version by then with the record's time. Without one (data saved before times were
+    // kept) any free slot less than 6 hours away may take the record.
+    const own = versions.filter(v => v.from <= at && v.times.includes(time)).pop();
+    for (const j of [i - 1, i, i + 1]) {
+      for (const slot of slots[j] ?? []) {
+        if (slot.record || own?.times.includes(slot.time)) continue;
+        if (j === i && own ? acrossMidnight(slot.time) : !near(slot.due)) continue;
+        pairs.push({ r, slot, distance: Math.abs(slot.due.getTime() - at), otherDay: j !== i });
+      }
     }
   }
-  pairs.sort((a, b) => a.distance - b.distance);
+  // Nearest first. On a tie the record's own day wins, then the earlier slot.
+  pairs.sort(
+    (a, b) =>
+      a.distance - b.distance ||
+      Number(a.otherDay) - Number(b.otherDay) ||
+      a.slot.due.getTime() - b.slot.due.getTime() ||
+      a.r.scheduledTime.localeCompare(b.r.scheduledTime),
+  );
   const placed = new Set<MedicationAdherence>();
   for (const { r, slot } of pairs) {
     if (slot.record || placed.has(r)) continue;
     slot.record = r;
     placed.add(r);
   }
-}
-
-/** A schedule's slots on a local day, with that day's records attached. */
-function slotsOn(s: MedicationSchedule, versions: Version[], day: Date, records: MedicationAdherence[]): Slot[] {
-  const start = startOfDay(day).getTime();
-  const end = addDays(day, 1).getTime();
-  const slots: Slot[] = versionAt(versions, end - 1).times.map(time => {
-    const key = dueKey(day, time);
-    const due = dueKeyToDate(key);
-    return { time, key, due, expected: inSchedule(s, versions, time, due.getTime()) };
-  });
-  attachRecords(
-    slots,
-    records,
-    versions.filter(v => v.from < end && v.until > start),
-  );
-  return slots;
+  for (const r of leftover) {
+    if (placed.has(r)) continue;
+    const key = r.scheduledTime;
+    slots[index.get(key.slice(0, 10))!].push({
+      time: key.slice(11),
+      key,
+      due: dueKeyToDate(key),
+      record: r,
+      expected: false,
+    });
+  }
+  return slots.slice(MARGIN_DAYS, MARGIN_DAYS + Math.max(0, count));
 }
 
 function isAfterEnd(s: MedicationSchedule, day: Date): boolean {
@@ -201,6 +247,7 @@ export interface DoseSlot {
   time: string;
   key: string;
   due: Date;
+  /** Its record. A record whose time an edit removed can have another key. */
   record?: MedicationAdherence;
   state: DoseState;
 }
@@ -213,6 +260,18 @@ function stateOf(slot: Slot, now: Date): DoseState {
   return diff < -DUE_FROM ? 'upcoming' : diff >= MISSED_AFTER ? 'overdue' : 'due';
 }
 
+const toDoseSlot = (schedule: MedicationSchedule, slot: Slot, now: Date): DoseSlot => ({
+  schedule,
+  time: slot.time,
+  key: slot.key,
+  due: slot.due,
+  record: slot.record,
+  state: stateOf(slot, now),
+});
+
+const byDue = (a: DoseSlot, b: DoseSlot) =>
+  a.due.getTime() - b.due.getTime() || a.schedule.medicationName.localeCompare(b.schedule.medicationName);
+
 /** Doses of active scheduled medications on one local day (the day of `now` by default). */
 export function dosesForDay(
   schedules: MedicationSchedule[],
@@ -220,27 +279,22 @@ export function dosesForDay(
   now = new Date(),
   day = now,
 ): DoseSlot[] {
-  const dayKey = localDateKey(day);
   const slots: DoseSlot[] = [];
   for (const schedule of schedules) {
     if (!schedule.isActive || schedule.frequency === 'as-needed' || !isListedOn(schedule, day)) continue;
-    const mine = records.filter(
-      r => r.scheduleId === schedule.id && isSlotKey(r.scheduledTime) && r.scheduledTime.startsWith(dayKey),
-    );
-    for (const slot of slotsOn(schedule, versionsOf(schedule), day, mine)) {
-      const { time, key, due, record } = slot;
-      slots.push({ schedule, time, key, due, record, state: stateOf(slot, now) });
-    }
+    const [list] = slotsBetween(schedule, versionsOf(schedule), records, startOfDay(day), 1);
+    for (const slot of list) slots.push(toDoseSlot(schedule, slot, now));
   }
-  return slots.sort(
-    (a, b) => a.due.getTime() - b.due.getTime() || a.schedule.medicationName.localeCompare(b.schedule.medicationName),
-  );
+  return slots.sort(byDue);
 }
 
 /**
  * The daily checklist. Today's doses, plus doses from last night or early tomorrow whose window is
  * open now (from an hour before their time until 2 hours after), so a dose due at 23:00 can still
- * be checked off at 00:30 and a dose due at 00:30 can be checked off at 23:45.
+ * be checked off at 00:30 and a dose due at 00:30 can be checked off at 23:45. A dose early tomorrow
+ * that already has a record also shows, such as tonight's dose after its time moved past midnight.
+ * Today's doses that do not count are left out when the same dose from the night before or after is
+ * listed, so this morning's 00:30, which was not in the schedule, is never mixed up with tonight's.
  */
 export function checklistDoses(
   schedules: MedicationSchedule[],
@@ -250,11 +304,79 @@ export function checklistDoses(
   const t = now.getTime();
   const isOpen = (s: DoseSlot) =>
     s.state !== 'untracked' && t >= s.due.getTime() - DUE_FROM && t < s.due.getTime() + MISSED_AFTER;
-  return [
-    ...dosesForDay(schedules, records, now, addDays(now, -1)).filter(isOpen),
-    ...dosesForDay(schedules, records, now),
-    ...dosesForDay(schedules, records, now, addDays(now, 1)).filter(isOpen),
-  ];
+  const lastNight = dosesForDay(schedules, records, now, addDays(now, -1)).filter(isOpen);
+  const tonight = dosesForDay(schedules, records, now, addDays(now, 1)).filter(
+    s => isOpen(s) || s.record !== undefined,
+  );
+  const sameDose = (a: DoseSlot) => (b: DoseSlot) => a.schedule.id === b.schedule.id && a.time === b.time;
+  const today = dosesForDay(schedules, records, now).filter(
+    s => s.state !== 'untracked' || ![...lastNight, ...tonight].some(sameDose(s)),
+  );
+  return [...lastNight, ...today, ...tonight];
+}
+
+/**
+ * One medication's doses from today and the `days` days before it, newest last, for recording a
+ * dose late or changing one. It lists every dose that counts and has come due, and any dose
+ * recorded early. Doses that do not count and have no record are left out. It works for paused
+ * medications too, and lists nothing for as-needed ones.
+ */
+export function recentDoses(
+  schedule: MedicationSchedule,
+  records: MedicationAdherence[],
+  now = new Date(),
+  days = RECENT_DAYS,
+): DoseSlot[] {
+  if (schedule.frequency === 'as-needed') return [];
+  const first = addDays(now, -days);
+  // Tomorrow too, for a dose recorded early
+  const all = slotsBetween(schedule, versionsOf(schedule), records, first, days + 2);
+  const slots: DoseSlot[] = [];
+  all.forEach((list, i) => {
+    if (isAfterEnd(schedule, addDays(first, i))) return;
+    for (const slot of list) {
+      if (!slot.expected || (!slot.record && slot.due.getTime() > now.getTime())) continue;
+      slots.push(toDoseSlot(schedule, slot, now));
+    }
+  });
+  return slots.sort(byDue);
+}
+
+/**
+ * The record to save when a dose is marked taken or skipped at `now`. A dose taken within its window
+ * was taken at the tap. A dose recorded after its window closed was most likely taken on time and
+ * ticked late, so it gets the time it was due, because the trigger finder reads dose times. The
+ * record keeps its key, so a late dose stays on its own slot. `id` is used for a new record.
+ */
+export function doseRecord(
+  slot: DoseSlot,
+  status: 'taken' | 'skipped',
+  id: string,
+  now = new Date(),
+): MedicationAdherence {
+  const lateFrom = slot.due.getTime() + MISSED_AFTER;
+  const keepTime = slot.record?.status === 'taken' && slot.record.takenTime;
+  return {
+    ...slot.record,
+    id: slot.record?.id ?? id,
+    scheduleId: slot.schedule.id,
+    medicationName: slot.schedule.medicationName,
+    scheduledTime: slot.record?.scheduledTime ?? slot.key,
+    status,
+    takenTime: status !== 'taken' ? undefined : keepTime || (now.getTime() >= lateFrom ? slot.due : now).toISOString(),
+  };
+}
+
+/**
+ * When a dose was taken, from an "HH:mm" time the person entered. It is that time on the day before,
+ * the day of, or the day after the dose was due, whichever is nearest to when it was due, so 00:30
+ * for a dose due at 23:00 is the next morning. Null when the time is not valid.
+ */
+export function takenAt(due: Date, time: string): Date | null {
+  if (!TIME.test(time)) return null;
+  const options = [-1, 0, 1].map(n => dueKeyToDate(dueKey(addDays(due, n), time)));
+  const distance = (d: Date) => Math.abs(d.getTime() - due.getTime());
+  return options.reduce((best, d) => (distance(d) < distance(best) ? d : best));
 }
 
 export interface Adherence {
@@ -279,29 +401,21 @@ export function adherenceFor(
   now = new Date(),
 ): Adherence {
   if (schedule.frequency === 'as-needed') return { expected: 0, taken: 0, skipped: 0, missed: 0, percent: null };
-  const versions = versionsOf(schedule);
-  const byDay = new Map<string, MedicationAdherence[]>();
-  for (const r of records) {
-    if (r.scheduleId !== schedule.id || !isSlotKey(r.scheduledTime)) continue;
-    const dayKey = r.scheduledTime.slice(0, 10);
-    const list = byDay.get(dayKey);
-    if (list) list.push(r);
-    else byDay.set(dayKey, [r]);
-  }
+  const first = addDays(now, -(days - 1));
+  const all = slotsBetween(schedule, versionsOf(schedule), records, first, days);
 
   let expected = 0;
   let taken = 0;
   let skipped = 0;
-  for (let i = days - 1; i >= 0; i--) {
-    const day = addDays(now, -i);
-    if (isAfterEnd(schedule, day)) continue;
-    for (const slot of slotsOn(schedule, versions, day, byDay.get(localDateKey(day)) ?? [])) {
+  all.forEach((list, i) => {
+    if (isAfterEnd(schedule, addDays(first, i))) return;
+    for (const slot of list) {
       if (!slot.record && (!slot.expected || slot.due.getTime() + MISSED_AFTER > now.getTime())) continue;
       expected++;
       if (slot.record?.status === 'taken') taken++;
       else if (slot.record?.status === 'skipped') skipped++;
     }
-  }
+  });
   const missed = expected - taken - skipped;
   return { expected, taken, skipped, missed, percent: expected ? Math.round((taken / expected) * 100) : null };
 }
@@ -362,15 +476,22 @@ export function startTrackingAt(s: MedicationSchedule, at = new Date()): Medicat
   return { ...s, startDate: iso, pausedAt: Number.isNaN(paused) ? iso : new Date(paused).toISOString() };
 }
 
-/** Taken doses as medication factors, so the trigger finder can look for side effects. */
+/**
+ * Taken doses as medication factors, so the trigger finder can look for side effects. A dose is
+ * placed at the time it was taken, or at the time it was due when that is not known.
+ */
 export function dosesAsFactors(records: MedicationAdherence[]): Factor[] {
-  return records
-    .filter(r => r.status === 'taken')
-    .map(r => ({
+  const factors: Factor[] = [];
+  for (const r of records) {
+    if (r.status !== 'taken') continue;
+    const t = ms(r.takenTime, dueKeyToDate(r.scheduledTime).getTime());
+    if (Number.isNaN(t)) continue;
+    factors.push({
       id: `dose-${r.id}`,
       name: r.medicationName,
-      category: 'medication' as const,
-      timestamp: r.takenTime ?? dueKeyToDate(r.scheduledTime).toISOString(),
-    }))
-    .filter(f => !Number.isNaN(Date.parse(f.timestamp)));
+      category: 'medication',
+      timestamp: new Date(t).toISOString(),
+    });
+  }
+  return factors;
 }

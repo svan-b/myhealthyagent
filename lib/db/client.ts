@@ -423,6 +423,8 @@ export const db = {
   },
 
   async saveDose(dose: MedicationAdherence): Promise<void> {
+    // The trigger finder reads when a dose was taken, so it cannot be in the future
+    if (dose.takenTime !== undefined) assertValidTime(dose.takenTime);
     const idb = await initDB();
     await idb.put('adherence', dose);
     if (dose.status === 'taken') await this.recordActivity();
