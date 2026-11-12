@@ -104,16 +104,19 @@ interface LoggedDays {
 }
 
 function lastSixtyDays(symptoms: Symptom[], factors: Factor[], now: Date): LoggedDays {
-  const cutoff = now.getTime() - 60 * DAY;
+  // Whole calendar days, today and the 59 before it, so the first day is never only partly counted
+  // and the counts shown can never add up to more than 60 days. Logs dated after now are left out.
+  const from = new Date(now.getFullYear(), now.getMonth(), now.getDate() - 59).getTime();
+  const inWindow = (t: number) => t >= from && t <= now.getTime();
   const tracked = new Set<string>();
   const bySymptom = new Map<string, SymptomDays>();
   for (const f of factors) {
     const t = Date.parse(f.timestamp);
-    if (t >= cutoff) tracked.add(dayKey(new Date(t)));
+    if (inWindow(t)) tracked.add(dayKey(new Date(t)));
   }
   for (const s of symptoms) {
     const t = Date.parse(s.timestamp);
-    if (!(t >= cutoff)) continue;
+    if (!inWindow(t)) continue;
     const k = dayKey(new Date(t));
     tracked.add(k);
     const g = bySymptom.get(lower(s.name)) ?? { name: s.name, days: new Set<string>() };

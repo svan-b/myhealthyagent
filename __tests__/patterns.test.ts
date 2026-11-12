@@ -37,13 +37,15 @@ describe('typical severity', () => {
   const logged = (levels: number[]) => levels.map((sev, i) => s('Migraine', new Date(2026, 5, 1 + i, 9), sev));
 
   it.each([
-    [[2, 2, 2, 9], 'Mild'],
-    [[2, 2, 2, 7], 'Mild'],
-    [[5, 5, 5, 9, 9, 9, 9], 'Very severe'],
-    [[7, 7, 7, 2], 'Severe'],
-    [[2, 2, 2, 9, 9, 9, 9], 'Very severe'],
-  ])('ratings %j are usually %s', (levels, label) => {
+    [[2, 2, 2, 9], 2, 'Mild'],
+    [[2, 2, 2, 7], 2, 'Mild'],
+    [[5, 5, 5, 9, 9, 9, 9], 9, 'Very severe'],
+    [[7, 7, 7, 2], 7, 'Severe'],
+    [[2, 2, 2, 9, 9, 9, 9], 9, 'Very severe'],
+  ])('ratings %j are usually %d, %s', (levels, level, label) => {
     const [summary] = summarizeSymptoms(logged(levels));
+    // Check the level itself too, because severityLabel(undefined) is also 'Very severe'
+    expect(summary.typicalSeverity).toBe(level);
     expect(severityLabel(summary.typicalSeverity)).toBe(label);
   });
 

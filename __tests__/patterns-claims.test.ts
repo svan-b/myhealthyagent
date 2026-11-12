@@ -57,6 +57,32 @@ describe('weekday pattern', () => {
       'In the last 60 days you logged symptoms on 4 of 30 tracked weekdays (13%) and 11 of 12 tracked weekend days (92%).',
     );
   });
+
+  it('counts the last 60 whole days, so the first day is not cut in half', () => {
+    // Opened at noon on Wed Nov 18, 2026. Dinner is logged at 7 pm every day before today, and a
+    // headache on every weekend morning. The window starts on Sun Sep 20. Counting back 60 times
+    // 24 hours instead would stop at noon on Sat Sep 19. That day would then count as tracked
+    // through its dinner but miss its morning headache, and the counts would cover 61 days.
+    const now = new Date(2026, 10, 18, 12);
+    const days = Array.from({ length: 61 }, (_, i) => new Date(2026, 10, 18 - i));
+    const at = (d: Date, hour: number) => new Date(d.getFullYear(), d.getMonth(), d.getDate(), hour);
+    const factors = days.map((d, i) => (i === 0 ? fac('Coffee', at(d, 8)) : fac('Dinner', at(d, 19))));
+    const headaches = days.filter(d => d.getDay() === 0 || d.getDay() === 6).map(d => sym('Headache', at(d, 10)));
+    expect(of(getPatterns(headaches, factors, now), 'weekday').map(w => w.detail)).toEqual([
+      'In the last 60 days you logged symptoms on 0 of 43 tracked weekdays (0%) and 17 of 17 tracked weekend days (100%).',
+    ]);
+  });
+
+  it('leaves out logs dated after now, such as ones restored from a phone with a wrong clock', () => {
+    const headaches = [7, 8, 14, 15, 4].map(d => sym('Headache', new Date(2026, 10, d, 15)));
+    // Nov 16 to 27 has not happened yet. It has coffee every day and a headache on each weekday.
+    const future = Array.from({ length: 12 }, (_, i) => new Date(2026, 10, 16 + i, 9));
+    const later = future.filter(d => d.getDay() !== 0 && d.getDay() !== 6).map(d => sym('Headache', d));
+    const coffee = [...twoWeeks, ...future.map(d => fac('Coffee', d))];
+    expect(of(getPatterns([...headaches, ...later], coffee, now), 'weekday').map(w => w.detail)).toEqual([
+      'In the last 60 days you logged symptoms on 1 of 10 tracked weekdays (10%) and 4 of 4 tracked weekend days (100%).',
+    ]);
+  });
 });
 
 describe('symptoms that show up together', () => {
