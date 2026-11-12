@@ -14,7 +14,8 @@ const SHELL = [
   '/icons/icon-192.png',
   '/icons/icon-512.png',
 ];
-// Not a real address. Holds the build files the app page loaded the last time it ran, so trim() keeps them.
+// Not a real address. Holds the build files the app page had loaded, including the doctor report code, the last time
+// it got that far, so trim() keeps them.
 const LOADED = '/__mha/loaded';
 const MAX_ENTRIES = 300;
 
@@ -96,7 +97,7 @@ async function saveBuildFile(cache, url) {
 }
 
 // Every deploy adds new build files, so drop the oldest entries to keep the cache from growing forever. Never
-// drop the app shell, a build file a cached page references, or one the app page loaded the last time it ran.
+// drop the app shell, a build file a cached page references, or one in the list remember() saved.
 async function trim() {
   const cache = await caches.open(CACHE);
   const keys = await cache.keys();
@@ -222,7 +223,9 @@ self.addEventListener('message', event => {
   if (data && data.type === 'CACHE_URLS' && Array.isArray(data.urls)) {
     const urls = data.urls.filter(u => typeof u === 'string' && u.startsWith(self.location.origin + '/'));
     const source = event.source && event.source.url ? new URL(event.source.url) : null;
-    if (source && source.pathname === '/') remember(urls.filter(isBuildFile));
+    // Only the app page's list from after the report code loaded replaces the saved one. The list it sends at start
+    // lacks that code, and a visit that ends before it loads must not leave the cached copy open to trim().
+    if (data.remember === true && source && source.pathname === '/') remember(urls.filter(isBuildFile));
     event.waitUntil(warm(urls));
   }
 });

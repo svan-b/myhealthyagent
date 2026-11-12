@@ -161,6 +161,18 @@ test('makes the doctor report offline without having made one online', async ({ 
       { timeout: 30_000 },
     )
     .toBe(true);
+  // The worker also remembers these files, so cleaning up the cache after later deploys keeps them.
+  await expect
+    .poll(
+      () =>
+        page.evaluate(async list => {
+          const saved = await caches.match('/__mha/loaded');
+          const urls: string[] = saved ? await saved.json() : [];
+          return list.every(f => urls.includes(location.origin + f));
+        }, files),
+      { timeout: 30_000 },
+    )
+    .toBe(true);
 
   await context.setOffline(true);
   await page.reload();
@@ -241,6 +253,16 @@ test.describe('moving to the home screen on iPhone', () => {
     await expect(page.getByRole('dialog').getByRole('button', { name: 'Download backup' })).toBeVisible();
     await expect(page.getByText('You have not made a backup yet.')).toHaveCount(0);
     expect(errors).toEqual([]);
+  });
+
+  test('once the backup is saved, focus moves to the message so the steps are read next', async ({ page }) => {
+    await page.goto('/');
+    await expect(page.getByRole('button', { name: 'Get started' })).toBeVisible();
+    await seed(page);
+    await page.reload();
+    await page.getByRole('button', { name: 'Download backup' }).focus();
+    await Promise.all([page.waitForEvent('download'), page.keyboard.press('Enter')]);
+    await expect(page.getByText('Backup saved')).toBeFocused();
   });
 
   test('medications and doses count toward showing the card', async ({ page }) => {

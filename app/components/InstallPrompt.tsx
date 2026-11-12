@@ -63,9 +63,15 @@ export function InstallPrompt() {
   const [device, setDevice] = React.useState<'iPhone' | 'iPad' | null>(null);
   const [hidden, setHidden] = React.useState(true);
   const [backup, setBackup] = React.useState<'idle' | 'busy' | 'done'>('idle');
+  const saved = React.useRef<HTMLParagraphElement>(null);
 
   // The app mounts this component on every start, even while the card stays hidden, so the preload lives here.
   React.useEffect(() => preloadReport(), []);
+
+  // The button goes away once the backup is saved. Move focus to the message so the next steps are read out.
+  React.useEffect(() => {
+    if (backup === 'done') saved.current?.focus();
+  }, [backup]);
 
   React.useEffect(() => {
     const standalone = window.matchMedia('(display-mode: standalone)').matches || isIosHomeScreenApp();
@@ -121,7 +127,7 @@ export function InstallPrompt() {
       <p className="font-semibold text-fg pr-8">Add to your home screen</p>
       {device && backup === 'done' ? (
         <>
-          <p className="text-sm text-ok font-medium mt-1 flex items-center gap-1.5">
+          <p ref={saved} tabIndex={-1} className="text-sm text-ok font-medium mt-1 flex items-center gap-1.5">
             <Check className="size-4" aria-hidden /> Backup saved
           </p>
           <ol className="text-sm text-muted mt-2 space-y-1 list-decimal pl-5">

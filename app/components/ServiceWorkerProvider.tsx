@@ -34,14 +34,18 @@ export function reloadOnUpdate(sw: Container, reload: () => void) {
   };
 }
 
-/** Asks the service worker to cache every build file this page has loaded, so the app also starts offline. */
-export async function warmCache() {
+/**
+ * Asks the service worker to cache every build file this page has loaded, so the app also starts offline. With
+ * remember, the worker also keeps these files when it cleans up, until the next list sent with remember. Only send
+ * it once the code that loads on demand is in, or a short visit would leave that code open to cleanup.
+ */
+export async function warmCache(remember = false) {
   const urls = performance
     .getEntriesByType('resource')
     .map(e => e.name)
     .filter(u => u.startsWith(location.origin) && u.includes('/_next/static/'));
   const reg = await navigator.serviceWorker.ready;
-  reg.active?.postMessage({ type: 'CACHE_URLS', urls: [location.origin + '/', ...urls] });
+  reg.active?.postMessage({ type: 'CACHE_URLS', urls: [location.origin + '/', ...urls], remember });
 }
 
 /**
@@ -58,7 +62,7 @@ export async function preloadForOffline(load: () => Promise<unknown>) {
   });
   await load();
   // The page may not be controlled yet on a first visit, so its own requests may not have reached the worker.
-  await warmCache();
+  await warmCache(true);
 }
 
 export default function ServiceWorkerProvider() {

@@ -1,4 +1,4 @@
-import { reloadOnUpdate } from '@/app/components/ServiceWorkerProvider';
+import { preloadForOffline, reloadOnUpdate, warmCache } from '@/app/components/ServiceWorkerProvider';
 
 /** Stands in for navigator.serviceWorker, with a controller and the controllerchange event. */
 class FakeContainer extends EventTarget {
@@ -64,5 +64,56 @@ describe('reloading into a new version', () => {
     updates.stop();
     sw.takeOver(v2);
     expect(reload).not.toHaveBeenCalled();
+  });
+});
+
+describe('telling the worker what the page loaded', () => {
+  const origin = window.location.origin;
+  let posted: unknown[];
+
+  beforeEach(() => {
+    posted = [];
+    Object.defineProperty(navigator, 'serviceWorker', {
+      configurable: true,
+      value: { ready: Promise.resolve({ active: { postMessage: (m: unknown) => posted.push(m) } }) },
+    });
+    Object.defineProperty(performance, 'getEntriesByType', {
+      configurable: true,
+      value: () => [{ name: `${origin}/_next/static/chunks/page.js` }, { name: 'https://elsewhere.test/x.js' }],
+    });
+  });
+
+  afterEach(() => {
+    delete (navigator as { serviceWorker?: unknown }).serviceWorker;
+    delete (performance as { getEntriesByType?: unknown }).getEntriesByType;
+  });
+
+  test('the list sent when the app starts does not replace the one the worker remembers', async () => {
+    await warmCache();
+    expect(posted).toEqual([
+      { type: 'CACHE_URLS', urls: [`${origin}/`, `${origin}/_next/static/chunks/page.js`], remember: false },
+    ]);
+  });
+
+  test('the list sent once the report code has loaded is the one the worker remembers', async () => {
+    const env = process.env as Record<string, string | undefined>;
+    const mode = env.NODE_ENV;
+    env.NODE_ENV = 'production';
+    Object.defineProperty(window, 'requestIdleCallback', {
+      configurable: true,
+      value: (run: () => void) => {
+        run();
+        return 1;
+      },
+    });
+    const load = jest.fn(async () => {});
+    try {
+      await preloadForOffline(load);
+    } finally {
+      env.NODE_ENV = mode;
+      delete (window as { requestIdleCallback?: unknown }).requestIdleCallback;
+    }
+    expect(load).toHaveBeenCalledTimes(1);
+    expect(posted).toEqual([expect.objectContaining({ type: 'CACHE_URLS', remember: true })]);
   });
 });

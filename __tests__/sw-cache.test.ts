@@ -214,9 +214,13 @@ async function fire(sw: SW, type: string, props: Record<string, unknown> = {}) {
 
 const navigate = (sw: SW, p: string) => fire(sw, 'fetch', { request: new FakeRequest(p, { mode: 'navigate' }) });
 const load = (sw: SW, p: string) => fire(sw, 'fetch', { request: new FakeRequest(p, { mode: 'no-cors' }) });
-const warm = (sw: SW, page: string, files: string[]) =>
+/**
+ * A page tells the worker what it loaded. The app sends one list when it starts (remember false) and one once the
+ * report code has loaded in idle time (remember true).
+ */
+const warm = (sw: SW, page: string, files: string[], remember = true) =>
   fire(sw, 'message', {
-    data: { type: 'CACHE_URLS', urls: [abs('/'), ...files.map(abs)] },
+    data: { type: 'CACHE_URLS', urls: [abs('/'), ...files.map(abs)], remember },
     source: { url: abs(page) },
   });
 
@@ -442,6 +446,7 @@ describe('trim', () => {
       deploy(w, files, [report, `/_next/static/chunks/worker.d${d}.js`]);
       await navigate(sw, '/');
       for (const f of files) await load(sw, f);
+      await warm(sw, '/', files, false);
       await load(sw, report);
       await warm(sw, '/', [...files, report]);
       // Something loaded after the warm-up, like the analysis worker when Insights opens, also triggers a trim.
@@ -456,15 +461,42 @@ describe('trim', () => {
     expect(cache.urls()).not.toContain('/_next/static/css/d1.css');
   });
 
-  test('only the app page decides what the last start loaded', async () => {
+  test('only the list the app page sends once its report code is in is remembered', async () => {
     const w = world();
     deploy(w, build('a'), [REPORT]);
     const sw = startWorker(w);
     await fire(sw, 'install');
     await warm(sw, '/', [REPORT]);
+    // The list the app sends when it starts, and lists from other pages, leave it alone.
+    await warm(sw, '/', build('a'), false);
     await warm(sw, '/privacy', ['/_next/static/chunks/app/privacy/page-a.js']);
     const saved = await (await currentCache(w)).match('/__mha/loaded');
     expect(await saved!.json()).toEqual([abs(REPORT)]);
+  });
+
+  test('a short visit that ends before the report code loads keeps the cached report code', async () => {
+    const w = world();
+    const files = build('a');
+    deploy(w, files, [REPORT]);
+    const sw = startWorker(w);
+    await fire(sw, 'install');
+    await fire(sw, 'activate');
+    // A full visit. The app starts, then loads the report code in idle time.
+    await navigate(sw, '/');
+    await warm(sw, '/', files, false);
+    await load(sw, REPORT);
+    await warm(sw, '/', [...files, REPORT]);
+    // Later deploys filled the cache with newer files, so the report code is now one of the oldest entries.
+    const cache = await currentCache(w);
+    for (let i = 0; i < 300; i++)
+      await cache.put(`/_next/static/chunks/later-${i}.js`, new FakeResponse('later', { type: 'basic' }));
+    // A short visit. The app starts and sends what it loaded, but closes before the report code loads.
+    await navigate(sw, '/');
+    await warm(sw, '/', files, false);
+    expect(cache.urls().length).toBeLessThanOrEqual(300);
+    // The next report is made offline.
+    w.net.online = false;
+    expect((await load(sw, REPORT)).networkError).toBe(false);
   });
 
   test('when two lists from the app page arrive together, the later one wins', async () => {
