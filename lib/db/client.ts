@@ -162,14 +162,24 @@ export const db = {
       await tx.done;
       throw new Error('The earlier entry was deleted. Tap Save again to log this as a new one.');
     }
+    // The earlier note is kept whole, also one longer than notes can be now (from an old backup). A new note goes
+    // on its own line after it. One that does not fit is refused rather than cut, so nothing written is lost.
+    const added = cleanNote(update.notes);
+    const notes = added ? [before.notes?.trim(), added].filter(Boolean).join('\n') : before.notes;
+    if (added && notes && notes.length > MAX_NOTE_LENGTH) {
+      await tx.done;
+      throw new Error(
+        'This note does not fit in the earlier entry, which already has a long note. Shorten it, or tap Save again and choose New one.',
+      );
+    }
     const after: Symptom = {
       ...normalizeSymptom({
         ...before,
         severity: Math.max(before.severity, update.severity),
         ongoing: true,
         duration_minutes: undefined,
-        notes: [before.notes?.trim(), cleanNote(update.notes)].filter(Boolean).join('\n'),
       }),
+      notes,
       updatedAt: new Date().toISOString(),
     };
     await tx.store.put(after);

@@ -200,8 +200,8 @@ function BackupSection() {
           }}
         />
         <p className="text-[13px] text-subtle">
-          Restoring adds entries from the file. It never removes what is already here, and changes made on this device
-          since the backup are kept.
+          Restoring adds entries from the file, including any you deleted here. It never removes what is already here,
+          and edits made on this device since the backup are kept.
         </p>
       </Card>
     </Group>

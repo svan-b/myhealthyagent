@@ -74,6 +74,12 @@ async function afterFirstLog() {
 /** What the person entered, kept while the Log screen asks whether it is the same symptom as an earlier entry. */
 type SymptomDraft = { name: string; severity: number; at: Date; duration: number; note: string };
 
+/**
+ * How long the toast after "Same one" stays, as for Undo toasts on the Meds screen. Its Undo is the only way to
+ * get the earlier entry back as it was, and its words take longer to read than the default 4 seconds allow.
+ */
+const SAME_ONE_TOAST_MS = 10_000;
+
 function SymptomFlow() {
   const { prefs, symptoms } = useHealthData();
   const [name, setName] = React.useState<string | null>(null);
@@ -153,6 +159,7 @@ function SymptomFlow() {
       const raised = level !== severityLabel(before.severity) ? `, now ${level.toLowerCase()}` : '';
       toast.success(`${after.name} updated`, {
         description: `Still going ${startedAt(before.timestamp).since}${raised}. No new entry was added.`,
+        duration: SAME_ONE_TOAST_MS,
         // Puts the earlier entry back exactly as it was.
         action: { label: 'Undo', onClick: () => db.restoreSymptom(before) },
       });
@@ -459,7 +466,9 @@ function FactorFlow() {
     const rows = [...selected.entries()].map(([name, category]) => ({
       id: newId(),
       name,
-      category,
+      // An item's category can be changed under Edit after its chip was picked. Saving the category it had when
+      // picked would undo that change, because saving also remembers the item with the category it was saved with.
+      category: yours.find(y => y.name === name)?.category ?? category,
       timestamp: ts,
       notes: note,
     }));

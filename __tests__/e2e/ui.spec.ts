@@ -157,9 +157,10 @@ test.describe('restoring a backup', () => {
 
     await page.getByRole('button', { name: 'Reports and data' }).click();
     const sheet = page.getByRole('dialog', { name: 'Reports and data' });
+    // A deletion made here since the backup is not kept, so the note says deleted entries come back.
     await expect(
       sheet.getByText(
-        'Restoring adds entries from the file. It never removes what is already here, and changes made on this device since the backup are kept.',
+        'Restoring adds entries from the file, including any you deleted here. It never removes what is already here, and edits made on this device since the backup are kept.',
       ),
     ).toBeVisible();
     const [download] = await Promise.all([
@@ -190,6 +191,37 @@ test.describe('restoring a backup', () => {
     const [row] = await stored(page, 'symptoms');
     expect(row.severity).toBe(7);
     expect(errors).toEqual([]);
+  });
+
+  test('brings back an entry deleted here since the backup, as the note under Restore says', async ({ page }) => {
+    await startFresh(page);
+    await logSymptom(page, 'Headache', 'Moderate');
+    await closeToast(page, 'Headache logged');
+
+    await page.getByRole('button', { name: 'Reports and data' }).click();
+    const sheet = page.getByRole('dialog', { name: 'Reports and data' });
+    const [download] = await Promise.all([
+      page.waitForEvent('download'),
+      sheet.getByRole('button', { name: 'Download backup' }).click(),
+    ]);
+    const backup = (await download.path())!;
+    await page.keyboard.press('Escape');
+
+    await openTab(page, 'History');
+    await page
+      .getByRole('main')
+      .getByRole('button', { name: /Headache/ })
+      .click();
+    const edit = page.getByRole('dialog', { name: 'Edit symptom' });
+    await edit.getByRole('button', { name: 'Delete', exact: true }).click();
+    await edit.getByRole('button', { name: 'Delete for good' }).click();
+    await expect(toast(page, 'Entry deleted')).toBeVisible();
+    await expect.poll(() => stored(page, 'symptoms')).toEqual([]);
+
+    await page.getByRole('button', { name: 'Reports and data' }).click();
+    await page.locator('input[type=file]').setInputFiles(backup);
+    await expect(toast(page, 'Backup restored')).toContainText('Restored 1 symptom.');
+    expect((await stored(page, 'symptoms')).map(s => s.name)).toEqual(['Headache']);
   });
 
   test('from the first screen, says what was restored', async ({ page }) => {
