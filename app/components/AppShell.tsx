@@ -10,10 +10,17 @@ import { MedsScreen } from './meds/MedsScreen';
 import { SettingsSheet } from './settings/SettingsSheet';
 import { Onboarding } from './Onboarding';
 import { InstallPrompt } from './InstallPrompt';
+import { announceActivating, announceActivation, supportText } from './pro/activation';
 import { HealthDataProvider, useHealthData } from '@/lib/hooks/useHealthData';
-import { useLicenseRefresh, usePro } from '@/lib/pro/client';
+import {
+  CHECKOUT_SESSION_ID,
+  finishCheckout,
+  savePendingCheckout,
+  useLicenseRefresh,
+  usePendingCheckoutRetry,
+} from '@/lib/pro/client';
 import { config } from '@/lib/config';
-import { cn, errorMessage } from '@/lib/utils';
+import { cn } from '@/lib/utils';
 
 const TABS = [
   { id: 'log', label: 'Log', icon: PenLine },
@@ -149,26 +156,56 @@ function Shell() {
   );
 }
 
-/** Finishes a Stripe Checkout redirect: exchanges the session for a license key. */
+/**
+ * Finishes a Stripe Checkout redirect. The session id is saved on the device before the address is
+ * cleaned, and the exchange for a license key is retried until it works or gets a final answer.
+ */
 function useCheckoutReturn() {
-  const { activate } = usePro();
   const done = React.useRef(false);
   React.useEffect(() => {
-    if (done.current) return;
-    const params = new URLSearchParams(window.location.search);
-    const status = params.get('checkout');
-    if (!status) return;
-    done.current = true;
-    const sessionId = params.get('session_id');
-    history.replaceState(null, '', window.location.pathname + window.location.hash);
-    if (status === 'success' && sessionId) {
-      toast.promise(activate({ sessionId }), {
-        loading: 'Activating Pro…',
-        success: 'Thank you. Pro is active. Your license key is saved under Reports and data.',
-        error: e => errorMessage(e, 'We could not confirm the payment yet. If you were charged, contact support.'),
-      });
-    } else if (status === 'cancel') {
-      toast('Checkout cancelled. You were not charged.');
-    }
-  }, [activate]);
+    // Wait until every effect of the first render has run. By then the toaster is listening, and Next's
+    // router has taken over history, so cleaning the address keeps Back working. The done check sits
+    // inside the timer so React's development double run cannot cancel the only attempt.
+    const timer = window.setTimeout(() => {
+      if (done.current) return;
+      const params = new URLSearchParams(window.location.search);
+      const status = params.get('checkout');
+      if (!status) return;
+      done.current = true;
+      const sessionId = params.get('session_id');
+      const cleanUrl = () => history.replaceState(null, '', window.location.pathname + window.location.hash);
+      if (status === 'success' && sessionId) {
+        void returnFromCheckout(sessionId, cleanUrl);
+      } else {
+        cleanUrl();
+        if (status === 'cancel') toast('Checkout cancelled. You were not charged.');
+      }
+    }, 0);
+    return () => window.clearTimeout(timer);
+  }, []);
+  usePendingCheckoutRetry(announceActivation);
+}
+
+async function returnFromCheckout(sessionId: string, cleanUrl: () => void) {
+  if (!CHECKOUT_SESSION_ID.test(sessionId)) {
+    cleanUrl();
+    toast.error('That checkout link is not complete, so Pro could not be turned on.', {
+      description: supportText(sessionId),
+      duration: Infinity,
+    });
+    return;
+  }
+  try {
+    await savePendingCheckout(sessionId);
+  } catch {
+    // Nothing could be saved. Keep the address as it is, so reloading the page tries again.
+    toast.error('Could not save your purchase on this device.', {
+      description: supportText(sessionId),
+      duration: Infinity,
+    });
+    return;
+  }
+  cleanUrl();
+  announceActivating(sessionId);
+  announceActivation(await finishCheckout(sessionId), sessionId, { showPending: true });
 }

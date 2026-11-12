@@ -62,6 +62,10 @@ export function normalizePreferences(raw: unknown): UserPreferences {
   const customFactors = Array.isArray(p.customFactors)
     ? (p.customFactors as UserPreferences['customFactors']).filter(f => f && typeof f.name === 'string')
     : [];
+  const pending = (p.pendingCheckout && typeof p.pendingCheckout === 'object' ? p.pendingCheckout : {}) as Record<
+    string,
+    unknown
+  >;
   return {
     ...DEFAULT_PREFERENCES,
     customSymptoms: strings(p.customSymptoms),
@@ -73,6 +77,10 @@ export function normalizePreferences(raw: unknown): UserPreferences {
     reportName: typeof p.reportName === 'string' ? p.reportName : undefined,
     licenseToken: typeof p.licenseToken === 'string' ? p.licenseToken : undefined,
     licenseCheckedAt: typeof p.licenseCheckedAt === 'string' ? p.licenseCheckedAt : undefined,
+    pendingCheckout:
+      typeof pending.sessionId === 'string' && typeof pending.since === 'string'
+        ? { sessionId: pending.sessionId, since: pending.since }
+        : undefined,
   };
 }
 
@@ -181,11 +189,23 @@ export const db = {
     return normalizePreferences(await idb.get('preferences', 'user-preferences'));
   },
 
-  async updatePreferences(patch: Partial<UserPreferences>): Promise<UserPreferences> {
+  /**
+   * Merges a patch into the stored preferences. Pass a function to work out the patch from what is
+   * stored, inside the same transaction, so nothing can be written between the check and the write.
+   * When the function returns null nothing changes.
+   */
+  async updatePreferences(
+    patch: Partial<UserPreferences> | ((current: UserPreferences) => Partial<UserPreferences> | null),
+  ): Promise<UserPreferences> {
     const idb = await initDB();
     const tx = idb.transaction('preferences', 'readwrite');
     const current = normalizePreferences(await tx.store.get('user-preferences'));
-    const next: UserPreferences = { ...current, ...patch, id: 'user-preferences' };
+    const change = typeof patch === 'function' ? patch(current) : patch;
+    if (!change) {
+      await tx.done;
+      return current;
+    }
+    const next: UserPreferences = { ...current, ...change, id: 'user-preferences' };
     await tx.store.put(next);
     await tx.done;
     notify();
@@ -299,19 +319,25 @@ export const db = {
   },
 
   // ----- Everything -----
-  async deleteAllData(): Promise<void> {
+  /**
+   * Erases everything on this device, the Pro license key included. With keepLicense, which the
+   * person has to choose, the key, when it was last checked and a purchase still being confirmed stay.
+   */
+  async deleteAllData({ keepLicense = false }: { keepLicense?: boolean } = {}): Promise<void> {
     const idb = await initDB();
     const names = STORES.filter(s => idb.objectStoreNames.contains(s));
     const tx = idb.transaction(names, 'readwrite');
-    // A purchased license is not health data. Keep it so the person does not lose Pro.
-    const prefs = normalizePreferences(await tx.objectStore('preferences').get('user-preferences'));
+    const prefs = keepLicense
+      ? normalizePreferences(await tx.objectStore('preferences').get('user-preferences'))
+      : null;
     await Promise.all(names.map(n => tx.objectStore(n).clear()));
-    if (prefs.licenseToken) {
+    if (prefs && (prefs.licenseToken || prefs.pendingCheckout)) {
       await tx.objectStore('preferences').put({
         ...DEFAULT_PREFERENCES,
         onboardedAt: prefs.onboardedAt,
         licenseToken: prefs.licenseToken,
         licenseCheckedAt: prefs.licenseCheckedAt,
+        pendingCheckout: prefs.pendingCheckout,
       });
     }
     await tx.done;

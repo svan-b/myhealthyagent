@@ -44,8 +44,18 @@ export interface UserPreferences {
   reportName?: string;
   /** Signed license token for Pro, issued by /api/license. */
   licenseToken?: string;
-  /** Last time the license was confirmed valid by the server. */
+  /** Last time the license was confirmed valid by the server. 1970-01-01 means the server said it ended. */
   licenseCheckedAt?: string;
+  /**
+   * A paid checkout that has not been turned into a license key yet. Saved before anything else
+   * happens after Stripe sends the person back, and kept until activation succeeds or fails for good.
+   */
+  pendingCheckout?: {
+    /** Stripe checkout session id (cs_...). */
+    sessionId: string;
+    /** When the app first saw it. */
+    since: string;
+  };
 }
 
 export type Frequency = 'daily' | 'twice-daily' | 'three-times' | 'four-times' | 'as-needed';

@@ -136,21 +136,12 @@ describe('payment routes', () => {
     expect(await (await POST(post({ token: 'mha1.fake.fake' }))).json()).toMatchObject({ valid: false });
   });
 
-  it('one time purchases stay valid without calling Stripe', async () => {
-    const calls = mockStripe(() => ({}));
+  it('one time purchases are confirmed with Stripe', async () => {
+    const calls = mockStripe(() => ({ id: 'cus_1' }));
     const token = issueLicense({ c: 'cus_1', k: 'once' });
     const { POST } = await import('@/app/api/license/route');
     expect(await (await POST(post({ token }))).json()).toEqual({ valid: true });
-    expect(calls).toHaveLength(0);
-  });
-
-  it('opens the billing portal only for a valid key', async () => {
-    const calls = mockStripe(() => ({ url: 'https://billing.stripe.com/p/session/x' }));
-    const { POST } = await import('@/app/api/portal/route');
-    expect((await POST(post({ token: 'bad' }))).status).toBe(400);
-    const res = await POST(post({ token: issueLicense({ c: 'cus_5', k: 'once' }) }));
-    expect(await res.json()).toEqual({ url: 'https://billing.stripe.com/p/session/x' });
-    expect(new URLSearchParams(String(calls[0].init.body)).get('customer')).toBe('cus_5');
+    expect(calls.map(c => c.url)).toEqual(['https://api.stripe.com/v1/customers/cus_1']);
   });
 
   it('rejects oversized and malformed bodies', async () => {

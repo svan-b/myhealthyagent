@@ -27,10 +27,20 @@ export default function TermsPage() {
 
       <h2>Pro</h2>
       <p>
-        Some features may require a paid Pro license. Prices are shown before checkout. Subscriptions renew
-        automatically until cancelled, and you can cancel at any time from Manage billing; access continues until the
-        end of the paid period. Payments are processed by Stripe. If something is wrong with a charge, contact us and we
-        will make it right.
+        Some features may require a paid Pro license. Prices are shown before checkout. Payments are processed by
+        Stripe. Subscriptions renew automatically until cancelled. You can cancel at any time{' '}
+        {config.billingPortalUrl ? (
+          'with “Manage billing” in Reports and data, where Stripe emails you a code to sign in'
+        ) : config.supportEmail ? (
+          <>
+            by emailing <a href={`mailto:${config.supportEmail}`}>{config.supportEmail}</a>
+          </>
+        ) : (
+          'by contacting us'
+        )}
+        , and access continues until the end of the paid period. If something is wrong with a charge, contact us and we
+        will make it right. A purchase that is refunded, or whose payment is reversed after a dispute, no longer unlocks
+        Pro.
       </p>
       <p>A license key is for your personal use. Please do not share or resell it.</p>
 

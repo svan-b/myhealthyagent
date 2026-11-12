@@ -16,7 +16,7 @@ import { downloadFile, exportBackup, exportCSV, importBackup } from '@/lib/db/ba
 import { usePro } from '@/lib/pro/client';
 import { config } from '@/lib/config';
 import { errorMessage } from '@/lib/utils';
-import { LicenseKeyForm, UpgradeCard } from '../pro/Upgrade';
+import { LicenseKeyForm, ManageBilling, UpgradeCard } from '../pro/Upgrade';
 
 const stamp = () => new Date().toISOString().slice(0, 10);
 
@@ -204,20 +204,23 @@ function BackupSection() {
   );
 }
 
-function ProSection() {
-  const pro = usePro();
-  const [busy, setBusy] = React.useState(false);
-  if (!pro.enabled) return null;
+async function copyKey(token: string) {
+  try {
+    await navigator.clipboard.writeText(token);
+    toast.success('License key copied');
+  } catch {
+    toast.error('Could not copy. Select and copy the key manually.');
+  }
+}
 
-  const copy = async () => {
-    if (!pro.licenseToken) return;
-    try {
-      await navigator.clipboard.writeText(pro.licenseToken);
-      toast.success('License key copied');
-    } catch {
-      toast.error('Could not copy. Select and copy the key manually.');
-    }
-  };
+function LicenseKey({ token }: { token: string }) {
+  return <code className="block text-[12px] break-all rounded-lg bg-surface-2 p-2 text-muted select-all">{token}</code>;
+}
+
+export function ProSection() {
+  const pro = usePro();
+  if (!pro.enabled) return null;
+  const token = pro.licenseToken;
 
   return (
     <Group title="Pro">
@@ -230,44 +233,85 @@ function ProSection() {
             <p className="text-sm text-muted">
               Save your license key to use Pro on another device. It is also included in backups.
             </p>
-            <code className="block text-[12px] break-all rounded-lg bg-surface-2 p-2 text-muted select-all">
-              {pro.licenseToken}
-            </code>
-            <div className="grid grid-cols-2 gap-2">
-              <Button variant="secondary" onClick={copy}>
-                Copy key
-              </Button>
-              <Button
-                variant="secondary"
-                disabled={busy}
-                onClick={async () => {
-                  setBusy(true);
-                  try {
-                    await pro.openPortal();
-                  } catch (e) {
-                    toast.error(errorMessage(e, 'Could not open billing'));
-                    setBusy(false);
-                  }
-                }}
-              >
-                Manage billing
-              </Button>
+            {token && <LicenseKey token={token} />}
+            <div className={config.billingPortalUrl ? 'grid grid-cols-2 gap-2' : undefined}>
+              {token && (
+                <Button variant="secondary" block onClick={() => copyKey(token)}>
+                  Copy key
+                </Button>
+              )}
+              {config.billingPortalUrl && <ManageBilling />}
             </div>
+            {!config.billingPortalUrl && <ManageBilling />}
           </>
         ) : (
           <>
-            {pro.hasKey && (
+            {pro.licenseState === 'ended' && !pro.pendingCheckout && (
               <p className="text-sm rounded-xl bg-warn-soft text-warn px-3 py-2 font-medium">
-                Your Pro license is no longer active. Renew below or manage billing.
+                {config.billingPortalUrl
+                  ? 'Your Pro license is no longer active. Renew below or manage billing.'
+                  : 'Your Pro license is no longer active. Renew below.'}
               </p>
             )}
             <UpgradeCard />
+            {token && (
+              <>
+                <LicenseKey token={token} />
+                <Button variant="secondary" block onClick={() => copyKey(token)}>
+                  Copy key
+                </Button>
+              </>
+            )}
             <p className="text-sm text-muted pt-1">Already bought Pro on another device?</p>
             <LicenseKeyForm />
+            {config.billingPortalUrl && (
+              <p className="text-sm text-muted pt-1">
+                Need to cancel, update your card or get an invoice? Stripe emails you a code to sign in, no key needed.
+              </p>
+            )}
+            <ManageBilling />
           </>
         )}
+        {token && <RemoveLicenseKey />}
       </Card>
     </Group>
+  );
+}
+
+function RemoveLicenseKey() {
+  const { removeKey } = usePro();
+  const [confirming, setConfirming] = React.useState(false);
+  if (!confirming) {
+    return (
+      <Button variant="quiet" block onClick={() => setConfirming(true)}>
+        Remove license key from this device
+      </Button>
+    );
+  }
+  return (
+    <div className="rounded-xl border border-line p-3 space-y-3">
+      <p className="text-sm text-fg">
+        Remove the license key from this device? Pro turns off here. Copy the key first if you want to use Pro again.
+      </p>
+      <div className="grid grid-cols-2 gap-2">
+        <Button variant="secondary" onClick={() => setConfirming(false)}>
+          Cancel
+        </Button>
+        <Button
+          variant="danger"
+          onClick={async () => {
+            try {
+              await removeKey();
+              toast.success('License key removed from this device');
+            } catch (e) {
+              toast.error(errorMessage(e, 'Could not remove the key'));
+            }
+          }}
+        >
+          Remove key
+        </Button>
+      </div>
+    </div>
   );
 }
 
@@ -319,10 +363,16 @@ function AboutSection() {
   );
 }
 
-function DeleteSection({ onDone }: { onDone: () => void }) {
+export function DeleteSection({ onDone }: { onDone: () => void }) {
+  const pro = usePro();
   const [stage, setStage] = React.useState<'idle' | 'confirm'>('idle');
   const [text, setText] = React.useState('');
+  const [keepChoice, setKeepChoice] = React.useState(false);
   const [busy, setBusy] = React.useState(false);
+  const token = pro.licenseToken;
+  const hasLicense = Boolean(token || pro.pendingCheckout);
+  const keepLicense = hasLicense && keepChoice;
+  const erasingKey = Boolean(token) && !keepLicense;
 
   if (stage === 'idle') {
     return (
@@ -335,9 +385,42 @@ function DeleteSection({ onDone }: { onDone: () => void }) {
     <Card className="p-4 space-y-3 border-danger/40">
       <p className="font-semibold text-danger">Delete everything on this device?</p>
       <p className="text-sm text-muted">
-        All symptoms, entries, medications, dose history and settings will be erased. This cannot be undone. Download a
-        backup first if you might want it later.
+        {erasingKey
+          ? 'All symptoms, entries, medications, dose history, settings and your Pro license key will be erased. This cannot be undone. Download a backup first if you might want it later, and copy the key if you want to use Pro again.'
+          : 'All symptoms, entries, medications, dose history and settings will be erased. This cannot be undone. Download a backup first if you might want it later.'}
       </p>
+      {hasLicense && (
+        <div className="rounded-xl bg-surface-2 p-3 space-y-3">
+          {token && (
+            <>
+              <code className="block text-[12px] break-all text-muted select-all">{token}</code>
+              <Button variant="secondary" size="sm" onClick={() => copyKey(token)}>
+                Copy key
+              </Button>
+            </>
+          )}
+          {pro.pendingCheckout && !keepLicense && (
+            <p className="text-sm text-muted">
+              The Pro purchase that is still being confirmed will be forgotten too. Its reference is{' '}
+              <span className="break-all font-mono text-[12px]">{pro.pendingCheckout.sessionId}</span>.
+            </p>
+          )}
+          <label className="flex items-start gap-2 text-sm font-semibold text-fg">
+            <input
+              type="checkbox"
+              className="mt-0.5 size-4 shrink-0 accent-accent"
+              checked={keepChoice}
+              onChange={e => setKeepChoice(e.target.checked)}
+            />
+            {token ? 'Keep my Pro license key on this device' : 'Keep my Pro purchase on this device'}
+          </label>
+          {keepLicense && token && (
+            <p className="text-sm text-muted">
+              Your Pro license key stays on this device. Anyone using this browser can see it and use Pro.
+            </p>
+          )}
+        </div>
+      )}
       <div>
         <Label htmlFor="confirm-delete">Type DELETE to confirm</Label>
         <Input
@@ -354,6 +437,7 @@ function DeleteSection({ onDone }: { onDone: () => void }) {
           onClick={() => {
             setStage('idle');
             setText('');
+            setKeepChoice(false);
           }}
         >
           Cancel
@@ -364,8 +448,14 @@ function DeleteSection({ onDone }: { onDone: () => void }) {
           onClick={async () => {
             setBusy(true);
             try {
-              await db.deleteAllData();
-              toast.success('All data deleted');
+              await db.deleteAllData({ keepLicense });
+              toast.success(
+                !keepLicense
+                  ? 'All data deleted'
+                  : token
+                    ? 'All data deleted. Your Pro license key was kept.'
+                    : 'All data deleted. Your Pro purchase was kept.',
+              );
               onDone();
             } catch (e) {
               toast.error(errorMessage(e));

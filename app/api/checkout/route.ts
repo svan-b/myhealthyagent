@@ -5,7 +5,7 @@ export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
 export async function POST(req: Request) {
-  if (rateLimited(req, 10)) return json({ error: 'Too many attempts. Please wait a minute.' }, 429);
+  if (rateLimited(req, 'checkout', 10)) return json({ error: 'Too many attempts. Please wait a minute.' }, 429);
   try {
     const cfg = stripeConfig();
     const origin = appOrigin(req);

@@ -25,7 +25,9 @@ When charging, keep these facts in mind.
 - **Value arrives after about two weeks of logging.** A 7 day trial ends before anyone sees a result, so skip short trials. The free plan already shows the strongest trigger, which is the moment people decide it works. Pro adds every finding and the doctor report.
 - **There is almost no server cost per user**, and the promise is "no account, no tracking". A one time unlock fits that story well and avoids churn from people who track around a flare and then stop.
 
-Recommendation: launch Pro as a **one time purchase around $19** (`STRIPE_MODE=payment`, `NEXT_PUBLIC_PRO_PRICE_LABEL="$19 once"`). Move to a subscription when you ship features with ongoing cost, like encrypted sync or reminders. The code supports both.
+Recommendation: launch Pro as a **one time purchase around $19** (`STRIPE_MODE=payment` and a price label of `$19 once`). Move to a subscription when you ship features with ongoing cost, like encrypted sync or reminders. The code supports both.
+
+Type the price label as `$19 once` in a hosting dashboard such as Vercel's. In a `.env` file write `NEXT_PUBLIC_PRO_PRICE_LABEL=\$19 once` instead, because Next.js reads `$19` in `.env` files as a variable and the button would show no price.
 
 Costs to plan for:
 
@@ -55,8 +57,9 @@ Signals that it is working: people come back for 14 days (they need to for resul
 - Have a lawyer review the privacy notice and terms for where you sell. Things to raise: the FDA's general wellness policy (keep marketing to tracking and patterns, never diagnosis or treatment), the FTC Health Breach Notification Rule, Washington's My Health My Data Act, and GDPR for EU users.
 - Never claim the app diagnoses, treats or cures anything, in the app, the store listing, ads or posts.
 - Only use real testimonials, with permission, and do not present unusual results as typical.
-- Set `NEXT_PUBLIC_SUPPORT_EMAIL` and answer it. Refund anyone who asks in the first weeks.
-- Run a full test purchase with Stripe test keys, then one real purchase with live keys, and refund yourself.
+- Set `NEXT_PUBLIC_SUPPORT_EMAIL` and answer it. Refund anyone who asks in the first weeks. A full refund turns that person's Pro off within about a day.
+- Turn on Stripe's customer portal and its login link, and set `NEXT_PUBLIC_STRIPE_PORTAL_LOGIN_URL`, so people can cancel and get invoices without writing to you.
+- Run a full test purchase with Stripe test keys, then one real purchase with live keys, and refund yourself. Use a different `LICENSE_SECRET` for the test keys, or set `LICENSE_VALID_FROM` to the time you switch to live keys, so no key from a test purchase keeps working.
 
 ## What to build next
 
