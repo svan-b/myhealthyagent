@@ -97,6 +97,18 @@ function delayedTrigger(from: number, to: number, opts: { dairyUntil?: number } 
   return { symptoms, factors };
 }
 
+/** Nausea and dizziness on the same days until a month ago, and headaches all along. */
+function stoppedPair() {
+  const symptoms: Symptom[] = [];
+  const factors: Factor[] = [];
+  for (let d = 59; d >= 0; d--) {
+    factors.push(factor('Coffee', 'drink', iso(d, 7, 30)));
+    if (d >= 32 && d % 2 === 0) symptoms.push(symptom('Nausea', iso(d, 10)), symptom('Dizziness', iso(d, 11)));
+    if (d % 4 === 1) symptoms.push(symptom('Headache', iso(d, 16)));
+  }
+  return { symptoms, factors };
+}
+
 describe('dates and the period each part covers (F19)', () => {
   test('when every log is older than the period, the trigger and pattern sections say which dates they come from', async () => {
     const b = await build(delayedTrigger(160, 40));
@@ -128,6 +140,65 @@ describe('dates and the period each part covers (F19)', () => {
     // The period itself shows no dairy and no bloating.
     expect(tableNamed(b, 'Symptom')?.body.map(r => r[0])).toEqual(['Headache']);
     expect(tableNamed(b, 'When')?.body.some(r => /Dairy|Bloating/.test(r[1]))).toBe(false);
+  });
+
+  test('a pattern about a symptom that stopped before the period gives its own dates and says when it was last logged', async () => {
+    // After the elimination diet, bloating stopped 35 days ago. Headaches go on.
+    const b = await build(delayedTrigger(120, 0, { dairyUntil: 35 }));
+    const patterns = section(b, 'Other patterns').split('\n');
+    const bloating = patterns.indexOf('Bloating usually starts in the morning');
+    expect(bloating).toBeGreaterThanOrEqual(0);
+    expect(patterns.slice(bloating + 2, bloating + 4)).toEqual([
+      // Only the bloating logs, not every symptom up to today.
+      'Based on logs from Jul 16 to Oct 8, 2026.',
+      'Bloating was last logged on Oct 8, 2026, before this report’s period.',
+    ]);
+    // Headaches were logged in the period, so their card has no such note.
+    const headache = patterns.indexOf('Headache usually starts in the morning');
+    expect(patterns[headache + 2]).toBe('Based on logs from Jul 15 to Nov 12, 2026.');
+    expect(patterns.join('\n')).not.toContain('Headache was last logged');
+  });
+
+  test('a together card names each symptom that was last logged before the period', async () => {
+    const { symptoms, factors } = stoppedPair();
+    const cards = getPatterns(symptoms, factors, NOW);
+    expect(cards.map(c => c.kind).sort()).toEqual(['time-of-day', 'time-of-day', 'time-of-day', 'together']);
+    const b = await build({ symptoms, factors });
+    const lines = section(b, 'Other patterns').split('\n');
+    const together = lines.indexOf('Nausea and dizziness tend to happen on the same day');
+    expect(together).toBeGreaterThanOrEqual(0);
+    expect(lines.slice(together + 1).join(' ')).toContain(
+      'Based on logs from Sep 14 to Nov 12, 2026. Nausea was last logged on Oct 11, 2026, before this report’s period. Dizziness was last logged on Oct 11, 2026, before this report’s period.',
+    );
+  });
+
+  test('wherever the page ends, a heading never ends a page and a pattern card is never split', async () => {
+    const { symptoms, factors } = stoppedPair();
+    const cards = getPatterns(symptoms, factors, NOW);
+    const footer = (r: { text: string }) => /^Page \d+ of \d+$|^Patient-recorded/.test(r.text);
+    const headings = ['Overview', 'Symptoms', 'Possible triggers', 'Other patterns', 'Medications', 'Entries'];
+    // Each symptom logged once in the period adds a row to the symptom table, which moves the patterns down.
+    for (let extra = 0; extra < 24; extra++) {
+      const once = Array.from({ length: extra }, (_, i) => symptom(`Symptom ${i + 1}`, iso(2, 9)));
+      const b = await build({ symptoms: [...symptoms, ...once], factors });
+      const runs = b.runs.filter(r => !footer(r));
+      runs.forEach((r, i) => {
+        if (headings.includes(r.text) && i + 1 < runs.length)
+          expect([extra, r.text, runs[i + 1].page]).toEqual([extra, r.text, r.page]);
+      });
+      for (const card of cards) {
+        const start = runs.findIndex(r => r.text === card.title);
+        const end = runs.findIndex(
+          (r, i) => i > start && (cards.some(c => c.title === r.text) || headings.includes(r.text)),
+        );
+        expect(start).toBeGreaterThanOrEqual(0);
+        expect([extra, card.title, new Set(runs.slice(start, end).map(r => r.page)).size]).toEqual([
+          extra,
+          card.title,
+          1,
+        ]);
+      }
+    }
   });
 
   test('triggers come from the same data as the Insights screen, whatever the period', async () => {
@@ -166,24 +237,29 @@ describe('dates and the period each part covers (F19)', () => {
     const cards = getPatterns(data.symptoms, data.factors, NOW);
     const kinds = name === 'trend and together' ? ['trend', 'together', 'time-of-day'] : ['time-of-day', 'weekday'];
     expect(new Set(cards.map(c => c.kind))).toEqual(new Set(kinds));
-    const expected: Record<PatternInsight['kind'], string> = {
-      // Every symptom logged, up to the last one.
-      'time-of-day': `Based on logs from ${fmtRange(
-        new Date(Math.min(...data.symptoms.map(s => Date.parse(s.timestamp)))),
-        new Date(Math.max(...data.symptoms.map(s => Date.parse(s.timestamp)))),
-      )}.`,
-      // The last 60 days, today included.
-      weekday: 'Based on logs from Sep 14 to Nov 12, 2026.',
-      together: 'Based on logs from Sep 14 to Nov 12, 2026.',
-      // The last four weeks, today included.
-      trend: 'Based on logs from Oct 16 to Nov 12, 2026.',
+    const expected = (card: PatternInsight) => {
+      if (card.kind === 'time-of-day') {
+        // Every log of the card's own symptom.
+        const times = data.symptoms
+          .filter(s => card.id === `tod-${s.name.toLowerCase()}`)
+          .map(s => Date.parse(s.timestamp));
+        expect(times.length).toBeGreaterThan(0);
+        return `Based on logs from ${fmtRange(new Date(Math.min(...times)), new Date(Math.max(...times)))}.`;
+      }
+      return {
+        // The last 60 days, today included.
+        weekday: 'Based on logs from Sep 14 to Nov 12, 2026.',
+        together: 'Based on logs from Sep 14 to Nov 12, 2026.',
+        // The last four weeks, today included.
+        trend: 'Based on logs from Oct 16 to Nov 12, 2026.',
+      }[card.kind];
     };
     const lines = section(b, 'Other patterns').split('\n');
     const starts = cards.map(c => lines.indexOf(c.title));
     expect(starts.every(i => i >= 0)).toBe(true);
     cards.forEach((card, k) => {
       const block = lines.slice(starts[k] + 1, starts[k + 1]);
-      expect(block.filter(l => l.startsWith('Based on'))).toEqual([expected[card.kind]]);
+      expect(block.filter(l => l.startsWith('Based on'))).toEqual([expected(card)]);
     });
   });
 });
@@ -592,6 +668,41 @@ describe('method note (R1)', () => {
     ]) {
       expect(method).toContain(phrase);
     }
+  });
+
+  test('says which days count as tracked: any diary entry, such as stress, but not a ticked dose alone', async () => {
+    // Stress is the only item, so a day with a stress entry has to count as tracked.
+    const symptoms: Symptom[] = [];
+    const factors: Factor[] = [];
+    for (let d = 40; d >= 0; d--) {
+      factors.push(factor('Stress', 'stress', iso(d, 9 + (d % 5))));
+      if (d % 3 === 0) symptoms.push(symptom('Headache', iso(d, 18)));
+    }
+    const b = await build({ symptoms, factors });
+    const text = section(b, 'Possible triggers').replace(/\n/g, ' ');
+    expect(text).toContain('The item checked was Stress.');
+    expect(text).toContain(
+      'Only days with at least one symptom or other diary entry count as tracked, not days with only a medication dose ticked off.',
+    );
+    expect(text).not.toContain('food, drink or activity entry');
+  });
+
+  test('is left out when there is not enough logging yet, even if a few comparisons were made', async () => {
+    let seed = 2;
+    const rnd = () => (seed = (seed * 1664525 + 1013904223) % 4294967296) / 4294967296;
+    const symptoms: Symptom[] = [];
+    const factors: Factor[] = [];
+    for (let d = 9; d >= 0; d--) {
+      factors.push(factor('Dairy', 'food', iso(d, 7 + Math.floor(rnd() * 12))));
+      if (rnd() < 0.6) symptoms.push(symptom('Headache', iso(d, 8 + Math.floor(rnd() * 12))));
+    }
+    const t = findTriggers(symptoms, factors, { now: NOW });
+    expect(t.trackedDays).toBeLessThan(14);
+    expect(t.testsRun).toBeGreaterThan(0);
+    expect(t.findings).toEqual([]);
+    const text = section(await build({ symptoms, factors }), 'Possible triggers').replace(/\n/g, ' ');
+    expect(text).toContain('Not enough logging yet to look for triggers.');
+    expect(text).not.toContain('Method:');
   });
 });
 

@@ -96,6 +96,14 @@ export async function buildReport(input: ReportInput): Promise<Report> {
     return first <= last ? `Based on logs from ${fmtRange(new Date(first), new Date(last))}.` : null;
   };
   const logTimes = [...input.symptoms, ...input.factors].map(at);
+  /**
+   * Said under a finding or pattern about something last logged before the period, such as a food the
+   * person has since stopped, so it is not read as current. Null when it was logged in the period.
+   */
+  const lastLoggedNote = (name: string, last: number) =>
+    Number.isFinite(last) && last < fromMs
+      ? print(`${name} was last logged on ${fmtDate(new Date(last))}, before this report’s period.`)
+      : null;
 
   // Overview
   const activeDays = new Set([...symptoms, ...factors].map(r => new Date(r.timestamp).toDateString())).size;
@@ -148,9 +156,10 @@ export async function buildReport(input: ReportInput): Promise<Report> {
       [f.factor, lastLogged([...input.factors, ...doseFactors], f.factor)],
       [f.symptom, lastLogged(input.symptoms, f.symptom)],
     ] as const) {
-      if (last >= fromMs || noted.has(key(name))) continue;
+      const note = noted.has(key(name)) ? null : lastLoggedNote(name, last);
+      if (!note) continue;
       noted.add(key(name));
-      beforePeriod.push(print(`${name} was last logged on ${fmtDate(new Date(last))}, before this report’s period.`));
+      beforePeriod.push(note);
     }
   }
   const triggerLead = words.lead && print(words.lead);
@@ -158,16 +167,39 @@ export async function buildReport(input: ReportInput): Promise<Report> {
   const triggerNotChecked = words.notChecked.map(print);
 
   // Other patterns, from the same data as the Insights screen. Each kind looks at its own days. Time of
-  // day looks at every symptom logged.
-  const patternBasis = (kind: PatternInsight['kind']) =>
-    kind === 'time-of-day'
-      ? basedOn(input.symptoms.map(at))
-      : basedOn(logTimes, daysBack(kind === 'trend' ? TREND_DAYS : PATTERN_DAYS));
-  const patterns = getPatterns(upToNow(input.symptoms), upToNow(input.factors), now).map(p => ({
-    title: print(p.title),
-    detail: print(p.detail),
-    basis: patternBasis(p.kind),
-  }));
+  // day looks at every log of its symptom, weekday and together at the last 60 days, trend at the last
+  // 4 weeks.
+  const patternSymptoms = upToNow(input.symptoms);
+  const sixtyDays = daysBack(PATTERN_DAYS);
+  // getPatterns groups symptoms by their lowercased name, and a card's id is made from those names.
+  const symptomKeys = [...new Set(patternSymptoms.map(s => s.name.toLowerCase()))];
+  const logsOf = (k: string, start = -Infinity) =>
+    patternSymptoms.filter(s => s.name.toLowerCase() === k && at(s) >= start);
+  /** The logs of each symptom a time of day or together card is about, as that card counts them. */
+  const cardSymptoms = (p: PatternInsight): Symptom[][] => {
+    if (p.kind === 'time-of-day') return symptomKeys.filter(k => p.id === `tod-${k}`).map(k => logsOf(k));
+    if (p.kind === 'together') {
+      for (const a of symptomKeys) {
+        for (const b of symptomKeys) {
+          if (p.id === `together-${a}-${b}`) return [logsOf(a, sixtyDays), logsOf(b, sixtyDays)];
+        }
+      }
+    }
+    return [];
+  };
+  const patterns = getPatterns(patternSymptoms, upToNow(input.factors), now).map(p => {
+    const about = cardSymptoms(p);
+    const basis =
+      p.kind === 'time-of-day'
+        ? basedOn((about[0] ?? patternSymptoms).map(at))
+        : basedOn(logTimes, daysBack(p.kind === 'trend' ? TREND_DAYS : PATTERN_DAYS));
+    // A symptom that has stopped, such as bloating after an elimination diet, is not read as current.
+    const notes = about.flatMap(logs => {
+      const note = logs.length ? lastLoggedNote(logs[0].name, Math.max(...logs.map(at))) : null;
+      return note ? [note] : [];
+    });
+    return { title: print(p.title), detail: print(p.detail), basis, notes };
+  });
 
   // Medications, for the period. The longest period adherence covers is 90 days.
   const medDays = Math.min(input.days, 90);
@@ -240,13 +272,15 @@ export async function buildReport(input: ReportInput): Promise<Report> {
       .line(M, y, W - M, y);
     y += 16;
   };
+  /** The lines of a paragraph wrapped to the page, with the font set for drawing them. */
+  const wrap = (text: string, { size = 10, bold = false, indent = 0 } = {}) => {
+    doc.setFont(FONT, bold ? 'bold' : 'normal').setFontSize(size);
+    return doc.splitTextToSize(print(text), width - indent) as string[];
+  };
   /** A paragraph, wrapped to the page. `indent` moves it right, and `bullet` puts a dot before its first line. */
   const para = (text: string, { size = 10, color = INK, bold = false, indent = 0, bullet = false, after = 0 } = {}) => {
-    doc
-      .setFont(FONT, bold ? 'bold' : 'normal')
-      .setFontSize(size)
-      .setTextColor(...color);
-    const lines = doc.splitTextToSize(print(text), width - indent) as string[];
+    const lines = wrap(text, { size, bold, indent });
+    doc.setTextColor(...color);
     // A short paragraph stays on one page.
     if (lines.length <= 8) ensure(lines.length * (size + 4));
     lines.forEach((line, i) => {
@@ -407,20 +441,33 @@ export async function buildReport(input: ReportInput): Promise<Report> {
     para('Not checked, so not ruled out', { size: 9, bold: true });
     for (const line of triggerNotChecked) para(line, { size: 9, indent: 10, bullet: true });
   }
-  if (triggers.testsRun > 0) {
+  // The method explains the table or the negative result. "Not enough logging yet" has neither, even
+  // when a few comparisons were made.
+  if (triggerRows.length || triggerChecked.length) {
     y += 4;
     para(methodNote(triggers.testsRun), { size: 8, color: MUTED });
   }
 
   if (patterns.length) {
-    heading('Other patterns', 50);
-    patterns.forEach(p => {
-      ensure(40);
-      para(p.title, { bold: true });
-      para(p.detail);
-      if (p.basis) para(p.basis, { size: 9, color: MUTED });
-      y += 6;
+    const cards = patterns.map(p => {
+      const parts: { text: string; size?: number; color?: RGB; bold?: boolean }[] = [
+        { text: p.title, bold: true },
+        { text: p.detail },
+        ...(p.basis ? [{ text: p.basis, size: 9, color: MUTED }] : []),
+        ...p.notes.map(text => ({ text, size: 9 })),
+      ];
+      return {
+        parts,
+        height: parts.reduce((h, part) => h + wrap(part.text, part).length * ((part.size ?? 10) + 4), 0),
+      };
     });
+    heading('Other patterns', cards[0].height);
+    for (const { parts, height } of cards) {
+      // A card stays on one page, so its dates and notes are never cut off from it.
+      ensure(height);
+      for (const { text, ...style } of parts) para(text, style);
+      y += 6;
+    }
   }
 
   // Medications

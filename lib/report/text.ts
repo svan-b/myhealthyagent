@@ -99,12 +99,6 @@ export function triggerText(t: TriggerAnalysis): TriggerText {
       'were logged at about the same time as the items that could be checked, so it is not clear which came first.',
     );
   }
-  if (!t.symptomsTested.length && !t.symptomsSkipped.length) {
-    notChecked.push('No symptoms were logged in the last six months.');
-  }
-  if (!t.factorsTested.length && !t.factorsSkipped.length) {
-    notChecked.push('No food, drink, activity or medication was logged in the last six months.');
-  }
 
   if (t.findings.length) {
     const found = new Set(t.findings.map(f => f.factor.trim().toLowerCase()));
@@ -143,7 +137,7 @@ export function triggerText(t: TriggerAnalysis): TriggerText {
 
 /** How the trigger analysis works, for a clinician. */
 export function methodNote(testsRun: number): string {
-  return `Method: for each item and delay, symptom starts in the window after the item were compared, with an exact test, with how many would fall there if each tracked day’s starts had happened at the same clock times on other tracked days. Only days with at least one symptom, food, drink or activity entry count as tracked. A symptom logged again within 6 hours, or within its logged duration plus an hour, counts as one episode. “Same hours, other days” is the usual chance of the symptom in the same hours on nearby days without the item, averaged over the times the item was logged. Results are corrected for the ${testsRun} ${testsRun === 1 ? 'comparison' : 'comparisons'} made (Benjamini–Hochberg). Medications taken for a symptom will naturally appear linked to it.`;
+  return `Method: for each item and delay, symptom starts in the window after the item were compared, with an exact test, with how many would fall there if each tracked day’s starts had happened at the same clock times on other tracked days. Only days with at least one symptom or other diary entry count as tracked, not days with only a medication dose ticked off. A symptom logged again within 6 hours, or within its logged duration plus an hour, counts as one episode. “Same hours, other days” is the usual chance of the symptom in the same hours on nearby days without the item, averaged over the times the item was logged. Results are corrected for the ${testsRun} ${testsRun === 1 ? 'comparison' : 'comparisons'} made (Benjamini–Hochberg). Medications taken for a symptom will naturally appear linked to it.`;
 }
 
 const time = (iso: string | undefined) => (iso ? Date.parse(iso) : NaN);
