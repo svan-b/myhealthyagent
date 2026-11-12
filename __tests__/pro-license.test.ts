@@ -275,3 +275,47 @@ describe('checkout activation answers (F04)', () => {
     spy.mockRestore();
   });
 });
+
+describe('an old return link of a subscription (P1)', () => {
+  // The checkout of a subscription stays paid after the subscription ends.
+  const paidSubscription = () => session({ mode: 'subscription', subscription: 'sub_1', payment_intent: null });
+
+  it('gets a final answer once the subscription has ended, so it cannot replace a key that works', async () => {
+    const POST = await route();
+    for (const [status, code] of [
+      ['canceled', 402],
+      ['incomplete_expired', 402],
+      ['unpaid', 402],
+      ['paused', 402],
+      ['active', 200],
+      ['trialing', 200],
+      ['past_due', 200],
+      ['incomplete', 200],
+    ] as const) {
+      const calls = mockStripe(url =>
+        url.pathname === '/v1/subscriptions/sub_1' ? { id: 'sub_1', status, customer: 'cus_1' } : paidSubscription(),
+      );
+      const res = await POST(post({ sessionId: SESSION }));
+      const data = await res.json();
+      expect([status, res.status]).toEqual([status, code]);
+      if (code === 402) {
+        expect(data).toEqual({ valid: false, reason: 'This subscription has ended.' });
+      } else {
+        expect(readLicense(data.token)).toMatchObject({ c: 'cus_1', s: 'sub_1', k: 'sub' });
+      }
+      expect(calls.map(u => u.pathname)).toEqual([`/v1/checkout/sessions/${SESSION}`, '/v1/subscriptions/sub_1']);
+    }
+  });
+
+  it('Stripe trouble while asking about the subscription is not an answer', async () => {
+    const POST = await route();
+    const spy = jest.spyOn(console, 'error').mockImplementation(() => {});
+    mockStripe(url =>
+      url.pathname === '/v1/subscriptions/sub_1'
+        ? { __status: 500, error: { message: 'Stripe is down' } }
+        : paidSubscription(),
+    );
+    expect((await POST(post({ sessionId: SESSION }))).status).toBe(502);
+    spy.mockRestore();
+  });
+});

@@ -101,7 +101,9 @@ describe('payment routes', () => {
       subscription: 'sub_9',
       metadata: { product: 'myhealthyagent-pro' },
     };
-    mockStripe(() => session);
+    mockStripe(url =>
+      url.endsWith('/v1/subscriptions/sub_9') ? { id: 'sub_9', status: 'active', customer: 'cus_9' } : session,
+    );
     const { POST } = await import('@/app/api/license/route');
     const ok = await POST(post({ sessionId: session.id }));
     const data = await ok.json();

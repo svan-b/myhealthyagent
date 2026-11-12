@@ -21,11 +21,14 @@ const SESSION_ID = /^cs_(test|live)_[A-Za-z0-9]{10,200}$/;
 const NOT_VALID = 'That license key is not valid.';
 const NOT_FOUND = 'We could not find that purchase.';
 const TURNED_OFF = 'This license has been turned off. Contact support if you think this is a mistake.';
+const SUBSCRIPTION_ENDED = 'This subscription has ended.';
 
 /**
  * POST { sessionId } after checkout: confirms payment with Stripe and returns a license key.
  *   200 { valid: true, token } on success. 202 { pending: true } while a bank payment is still
  *   processing, so the app asks again later. Other 4xx answers, and 200 with valid false, are final.
+ *   A subscription that has ended since gets a final 402, not a key, so opening an old return link
+ *   never replaces a key that still works.
  * POST { token }: confirms an existing license key still counts. Only a definite answer from Stripe
  *   gives valid false. When Stripe cannot be reached the answer is 502, and the app keeps Pro for its
  *   offline grace period.
@@ -76,7 +79,20 @@ async function exchange(sessionId: string) {
   }
   const problem = await purchaseProblem(session);
   if (problem) return json({ valid: false, reason: problem }, 403);
+  if (payload.s && (await subscriptionEnded(payload.s))) {
+    return json({ valid: false, reason: SUBSCRIPTION_ENDED }, 402);
+  }
   return json({ valid: true, token: issueLicense(payload) });
+}
+
+/**
+ * True when the subscription a paid checkout started has ended or stopped since. Its checkout stays
+ * paid, so without this an old return link would get a new key that shows Pro for a day and replaces
+ * the key on the device. A subscription that is still starting (incomplete) does not count as ended.
+ */
+async function subscriptionEnded(id: string): Promise<boolean> {
+  const sub = await stripe<Subscription>('GET', `/subscriptions/${encodeURIComponent(id)}`);
+  return !ACTIVE_STATUSES.has(sub.status) && sub.status !== 'incomplete';
 }
 
 /**
@@ -104,7 +120,7 @@ async function check(token: unknown) {
     if (sub.customer !== license.c) return json({ valid: false, reason: NOT_VALID });
     return ACTIVE_STATUSES.has(sub.status)
       ? json({ valid: true, status: sub.status })
-      : json({ valid: false, status: sub.status, reason: 'This subscription has ended.' });
+      : json({ valid: false, status: sub.status, reason: SUBSCRIPTION_ENDED });
   }
 
   if (license.cs) {

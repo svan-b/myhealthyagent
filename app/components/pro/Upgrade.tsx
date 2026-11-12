@@ -54,7 +54,7 @@ export function UpgradeCard({
     return (
       <div className="space-y-3">
         {pending.map(p => (
-          <PendingPurchase key={p.sessionId} pending={p} />
+          <PendingPurchase key={p.sessionId} pending={p} several={pending.length > 1} />
         ))}
       </div>
     );
@@ -103,10 +103,13 @@ function BuyCard({ title, compact }: { title: string; compact: boolean }) {
   );
 }
 
-function PendingPurchase({ pending }: { pending: PendingCheckout }) {
+function PendingPurchase({ pending, several }: { pending: PendingCheckout; several: boolean }) {
   const [busy, setBusy] = React.useState(false);
   const since = new Date(pending.since);
   const overdue = pendingCheckoutOverdue(pending);
+  // With more than one card on screen, the buttons say which purchase they are for.
+  const referenceId = React.useId();
+  const describedBy = several ? referenceId : undefined;
 
   const retry = async () => {
     setBusy(true);
@@ -126,16 +129,21 @@ function PendingPurchase({ pending }: { pending: PendingCheckout }) {
           : 'Thank you for your purchase. Pro turns on as soon as Stripe confirms the payment, usually within a minute. Bank payments can take a few days. The app keeps checking on its own.'}
       </p>
       <div className="space-y-2">
-        <Button block onClick={retry} disabled={busy}>
+        <Button block onClick={retry} disabled={busy} aria-describedby={describedBy}>
           {busy ? 'Checking…' : 'Retry activation'}
         </Button>
         {overdue && (
-          <Button variant="secondary" block onClick={() => void forgetPendingCheckout(pending.sessionId)}>
+          <Button
+            variant="secondary"
+            block
+            onClick={() => void forgetPendingCheckout(pending.sessionId)}
+            aria-describedby={describedBy}
+          >
             Dismiss
           </Button>
         )}
       </div>
-      <SupportHint reference={pending.sessionId} />
+      <SupportHint reference={pending.sessionId} referenceId={referenceId} />
     </Card>
   );
 }
@@ -166,7 +174,7 @@ function UnverifiedLicense({ token }: { token: string }) {
 }
 
 /** Who to contact about a purchase, with the checkout reference to quote. */
-export function SupportHint({ reference }: { reference: string }) {
+export function SupportHint({ reference, referenceId }: { reference: string; referenceId?: string }) {
   return (
     <p className="text-[13px] text-muted">
       If you were charged and this does not resolve,{' '}
@@ -180,7 +188,11 @@ export function SupportHint({ reference }: { reference: string }) {
       ) : (
         'contact support'
       )}{' '}
-      and quote reference <span className="break-all font-mono text-[12px]">{reference}</span>.
+      and quote reference{' '}
+      <span id={referenceId} className="break-all font-mono text-[12px]">
+        {reference}
+      </span>
+      .
     </p>
   );
 }

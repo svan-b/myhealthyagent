@@ -631,6 +631,33 @@ describe('another checkout link while a purchase is being confirmed (P1)', () =>
     expect(await saved()).toEqual([MINE]);
   });
 
+  it('with more than one card, each button says which purchase it is for', async () => {
+    const described = (b: HTMLButtonElement) => {
+      const id = b.getAttribute('aria-describedby');
+      return id ? document.getElementById(id)?.textContent : undefined;
+    };
+    const buttons = () =>
+      Array.from(container.querySelectorAll('button')).map(b => [b.textContent, described(b)] as const);
+
+    // One card: the buttons need nothing more.
+    await pro.savePendingCheckout(MINE);
+    await render(h(UpgradeCard));
+    expect(buttons()).toEqual([['Retry activation', undefined]]);
+    await act(async () => root?.unmount());
+    container.remove();
+
+    // Two cards, the second one overdue: each button points to its own reference.
+    await db.updatePreferences(cur => ({
+      pendingCheckouts: [...(cur.pendingCheckouts ?? []), { sessionId: LINK, since: '2026-01-01T00:00:00.000Z' }],
+    }));
+    await render(h(UpgradeCard));
+    expect(buttons()).toEqual([
+      ['Retry activation', MINE],
+      ['Retry activation', LINK],
+      ['Dismiss', LINK],
+    ]);
+  });
+
   it('a checkout reference pasted in the key box joins the saved purchases', async () => {
     await pro.savePendingCheckout(MINE);
     await render(h(LicenseKeyForm));
