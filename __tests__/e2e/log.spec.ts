@@ -105,6 +105,35 @@ test('typing a food that already has a chip selects that chip and saves it once'
   expect(rows.map(r => [r.name, r.category])).toEqual([['Alcohol', 'drink']]);
 });
 
+test('an item selected in one tab stays in view when another tab remembers it with other capitals', async ({
+  page,
+  context,
+}) => {
+  await startFresh(page);
+  await page.getByRole('radio', { name: 'What I had or did' }).click();
+  await page.getByLabel('Something else').fill('kombucha');
+  await page.getByRole('button', { name: 'Add', exact: true }).click();
+  const typed = page.getByRole('button', { name: 'kombucha', exact: true });
+  await expect(typed).toHaveAttribute('aria-pressed', 'true');
+
+  // The same app in a second tab logs "Kombucha", which adds it to the remembered items in both tabs.
+  const other = await context.newPage();
+  await other.goto('/');
+  await other.getByRole('radio', { name: 'What I had or did' }).click();
+  await other.getByLabel('Something else').fill('Kombucha');
+  await other.getByLabel('Category').selectOption('drink');
+  await other.getByRole('button', { name: 'Add', exact: true }).click();
+  await other.getByRole('button', { name: 'Save 1 item' }).click();
+  await expect(other.getByText('Kombucha logged')).toBeVisible();
+
+  await expect(page.getByRole('button', { name: 'Kombucha', exact: true })).toBeVisible();
+  // The first tab still shows what it will save, and the person can unselect it.
+  await expect(page.getByRole('button', { name: 'Save 1 item' })).toBeVisible();
+  await expect(typed).toHaveAttribute('aria-pressed', 'true');
+  await typed.click();
+  await expect(page.getByRole('button', { name: 'Pick at least one' })).toBeDisabled();
+});
+
 test('voice control can find the symptom Add and Back buttons by the words they show', async ({ page }) => {
   await startFresh(page);
   await page.getByLabel('Other symptom').fill('Hives');
@@ -214,6 +243,23 @@ test.describe('closing a sheet gives focus back', () => {
     await expect(row).toHaveCount(0);
     await expect(page.getByRole('heading', { name: 'History', level: 1 })).toBeFocused();
     expect(errors).toEqual([]);
+  });
+
+  test('in History, to the entry when a new date moves it to another day', async ({ page }) => {
+    await page.clock.install({ time: new Date(2026, 10, 12, 12, 0) });
+    await startFresh(page);
+    await logSymptom(page, 'Headache');
+    await logSymptom(page, 'Nausea');
+    await openTab(page, 'History');
+    const sheet = page.getByRole('dialog', { name: 'Edit symptom' });
+    await openWithKeyboard(page, page.getByRole('main').getByRole('button', { name: /Headache/ }), sheet);
+    await sheet.getByLabel('Date and time').fill('2026-11-10T09:00');
+    await sheet.getByRole('button', { name: 'Save changes' }).focus();
+    await page.keyboard.press('Enter');
+    await expect(sheet).toBeHidden();
+    // The entry is drawn again under its new day, as a new element. Focus goes there with it.
+    const day = page.locator('section').filter({ has: page.getByRole('heading', { name: 'Tuesday, Nov 10' }) });
+    await expect(day.getByRole('button', { name: /Headache/ })).toBeFocused();
   });
 
   test('in History, to the entry it was opened from, even when a click did not focus it', async ({ page }) => {

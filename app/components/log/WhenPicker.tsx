@@ -10,7 +10,13 @@ import { cn, fromLocalInputValue, toLocalInputValue } from '@/lib/utils';
  * screen stayed open for a while, so the time is worked out with resolveWhen when Save is tapped.
  * For "Earlier", local is the value of the date and time field.
  */
-export type When = { kind: 'now' } | { kind: 'ago'; minutes: number } | { kind: 'at'; local: string };
+export type When = ({ kind: 'now' } | { kind: 'ago'; minutes: number } | { kind: 'at'; local: string }) & {
+  /**
+   * The last full date and time the person typed under "Earlier". It is kept while another chip is picked, so going
+   * back to "Earlier" shows it again. Setting WHEN_NOW after a save forgets it.
+   */
+  earlier?: string;
+};
 
 export const WHEN_NOW: When = { kind: 'now' };
 
@@ -38,19 +44,24 @@ export function WhenPicker({
 }) {
   const id = React.useId();
   const incomplete = value.kind === 'at' && !fromLocalInputValue(value.local);
+  const { earlier } = value;
 
   return (
     <fieldset>
       <legend className="text-sm font-semibold text-fg mb-2">{label}</legend>
       <div className="grid grid-cols-4 gap-2">
-        <Chip selected={value.kind === 'now'} onClick={() => onChange(WHEN_NOW)} className="px-2 text-center text-sm">
+        <Chip
+          selected={value.kind === 'now'}
+          onClick={() => onChange({ kind: 'now', earlier })}
+          className="px-2 text-center text-sm"
+        >
           Now
         </Chip>
         {AGO.map(a => (
           <Chip
             key={a.minutes}
             selected={value.kind === 'ago' && value.minutes === a.minutes}
-            onClick={() => onChange({ kind: 'ago', minutes: a.minutes })}
+            onClick={() => onChange({ kind: 'ago', minutes: a.minutes, earlier })}
             className="px-2 text-center text-sm"
           >
             {a.label}
@@ -59,7 +70,7 @@ export function WhenPicker({
         <Chip
           selected={value.kind === 'at'}
           onClick={() => {
-            if (value.kind !== 'at') onChange({ kind: 'at', local: toLocalInputValue(new Date()) });
+            if (value.kind !== 'at') onChange({ kind: 'at', local: earlier ?? toLocalInputValue(new Date()), earlier });
           }}
           className="px-2 text-center text-sm"
         >
@@ -79,7 +90,10 @@ export function WhenPicker({
             aria-invalid={incomplete || undefined}
             aria-describedby={incomplete ? `${id}-hint` : undefined}
             className={cn(incomplete && 'border-danger')}
-            onChange={e => onChange({ kind: 'at', local: e.target.value })}
+            onChange={e => {
+              const local = e.target.value;
+              onChange({ kind: 'at', local, earlier: fromLocalInputValue(local) ? local : undefined });
+            }}
           />
           {incomplete && (
             <p id={`${id}-hint`} className="mt-1.5 text-sm font-medium text-danger">

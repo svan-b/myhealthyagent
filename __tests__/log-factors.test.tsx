@@ -143,6 +143,21 @@ describe('typing a food or activity that is already on screen', () => {
     await click('Save 1 item');
     expect(savedFactors()).toEqual([['Kombucha', 'drink']]);
   });
+
+  it('keeps a selected item in view when another tab remembers it with other capitals', async () => {
+    await addFactor('kombucha', 'drink');
+    expect(pressed('kombucha')).toBe('true');
+
+    // Another tab logs "Kombucha" while "kombucha" is still selected here, so the remembered list changes.
+    mockData.prefs = { customSymptoms: [], customFactors: [{ name: 'Kombucha', category: 'drink' }] };
+    await act(async () => root.render(<LogScreen />));
+    expect(saveButton().textContent).toBe('Save 1 item');
+    // The selected item still has a chip that shows it, and that chip can unselect it.
+    expect(pressed('kombucha')).toBe('true');
+    expect(pressed('Kombucha')).toBe('false');
+    await click('kombucha');
+    expect(saveButton().textContent).toBe('Pick at least one');
+  });
 });
 
 it('a typed symptom that is already listed uses the listed name', async () => {

@@ -219,4 +219,28 @@ describe('time picker on the log screen', () => {
     await click('Earlier');
     expect(dateInput()?.value).toBe(toLocalInputValue(at(15, 40)));
   });
+
+  it('a date typed under "Earlier" is still there after picking another chip and coming back', async () => {
+    await click('What I had or did');
+    await click('Dairy');
+    await click('Earlier');
+    await typeDate('2026-11-11T19:00');
+    await click('3 hrs ago');
+    await click('Now');
+    expect(dateInput()).toBeNull();
+    await click('Earlier');
+    expect(dateInput()?.value).toBe('2026-11-11T19:00');
+    await click('Save 1 item');
+    expect(new Date(lastFactorTime()).getTime()).toBe(new Date(2026, 10, 11, 19, 0).getTime());
+
+    // A save forgets it, so the next "Earlier" starts at the time it is tapped again.
+    jest.setSystemTime(at(9, 30));
+    await click('Earlier');
+    expect(dateInput()?.value).toBe(toLocalInputValue(at(9, 30)));
+    // Only a typed date is kept. The time filled in when "Earlier" was tapped is not.
+    await click('1 hr ago');
+    jest.setSystemTime(at(10, 15));
+    await click('Earlier');
+    expect(dateInput()?.value).toBe(toLocalInputValue(at(10, 15)));
+  });
 });

@@ -348,9 +348,10 @@ function FactorFlow() {
     }
   };
 
-  const extraSelected = [...selected.entries()].filter(
-    ([n]) => !builtIn.has(n.toLowerCase()) && !yours.some(y => y.name.toLowerCase() === n.toLowerCase()),
-  );
+  // Every selected item needs a chip that shows it. The chips match names exactly, so this check must too. Another
+  // tab can remember "Kombucha" while "kombucha" is selected here, and that item must not disappear from view.
+  const chipNames = new Set([...FACTOR_GROUPS.flatMap(g => g.items.map(i => i.name)), ...yours.map(y => y.name)]);
+  const extraSelected = [...selected.entries()].filter(([n]) => !chipNames.has(n));
 
   return (
     <div className="space-y-5">
