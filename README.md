@@ -66,11 +66,7 @@ npx playwright install chromium
 npm run test:e2e
 ```
 
-A GitHub Actions workflow that runs all of this on every push and pull request, plus `npm audit` on production dependencies, is in [`ci/github-actions.yml`](ci/github-actions.yml). To turn it on, move it into place and commit:
-
-```bash
-mkdir -p .github/workflows && git mv ci/github-actions.yml .github/workflows/ci.yml
-```
+[GitHub Actions](.github/workflows/ci.yml) runs all of this on every push, plus `npm audit` on production dependencies.
 
 ## Deploying
 
