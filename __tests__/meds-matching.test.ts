@@ -104,6 +104,78 @@ describe('a bedtime dose moved past midnight just after it was taken', () => {
   });
 });
 
+describe('a bedtime dose whose time is moved past midnight just after midnight', () => {
+  // Quetiapine at 23:00, taken at 23:05, then at 00:10 the time is moved to 00:30
+  const taken = dose(NOV12, '23:00', 'taken', nov12(23, 5));
+  const moved = changeTimes(med(), 'daily', ['00:30'], nov13(0, 10));
+
+  it('shows the 00:30 dose as taken, not due', () => {
+    // Before the edit, last night's dose shows as taken
+    expect(keys(checklistDoses([med()], [taken], nov13(0, 5)))).toEqual([
+      ['2026-11-12T23:00', 'taken'],
+      ['2026-11-13T23:00', 'upcoming'],
+    ]);
+    for (const now of [nov13(0, 10), nov13(0, 30), nov13(1), nov13(2, 45)]) {
+      const list = checklistDoses([moved], [taken], now);
+      expect(list.map(s => s.key)).toEqual(['2026-11-13T00:30']);
+      expect(list[0]).toMatchObject({ state: 'taken', record: taken });
+    }
+  });
+
+  it('counts the dose once, on the new time', () => {
+    const records = [...everyDayBefore(NOV12, 31, ['23:00']), taken];
+    // Oct 15 to Nov 11 at 23:00, then Nov 13 at 00:30 with the dose taken on the 12th at 23:05
+    expect(adherenceFor(moved, records, 30, nov13(12))).toMatchObject({ expected: 29, taken: 29, percent: 100 });
+    expect(keys(dosesForDay([moved], records, nov13(12), NOV12))).toEqual([]);
+    expect(keys(dosesForDay([moved], records, nov13(12)))).toEqual([['2026-11-13T00:30', 'taken']]);
+  });
+
+  it('still offers the next night’s dose', () => {
+    expect(keys(checklistDoses([moved], [taken], nov13(23, 40)))).toEqual([
+      ['2026-11-13T00:30', 'taken'],
+      ['2026-11-14T00:30', 'due'],
+    ]);
+  });
+
+  it('moves a skipped dose too, so it is not offered again', () => {
+    const skipped = dose(NOV12, '23:00', 'skipped');
+    expect(keys(checklistDoses([moved], [skipped], nov13(0, 20)))).toEqual([['2026-11-13T00:30', 'skipped']]);
+  });
+
+  it('leaves the dose on its own night when the new time had already passed at the edit', () => {
+    const afterwards = changeTimes(med(), 'daily', ['00:30'], nov13(1));
+    expect(keys(dosesForDay([afterwards], [taken], nov13(1, 5), NOV12))).toEqual([['2026-11-12T23:00', 'taken']]);
+    expect(keys(dosesForDay([afterwards], [taken], nov13(1, 5)))).toEqual([['2026-11-13T00:30', 'untracked']]);
+  });
+
+  it('still offers a dose that was added, not moved, and a dose 6 hours or more later', () => {
+    // A second dose at 00:30, with 23:00 kept
+    const added = changeTimes(med(), 'twice-daily', ['00:30', '23:00'], nov13(0, 10));
+    expect(keys(checklistDoses([added], [taken], nov13(0, 15)))).toEqual([
+      ['2026-11-12T23:00', 'taken'],
+      ['2026-11-13T00:30', 'due'],
+      ['2026-11-13T23:00', 'upcoming'],
+    ]);
+    // 04:30 is 5½ hours after 23:00, the same night. 05:00 is 6 hours after, a new day's dose.
+    const by = (time: string) => changeTimes(med(), 'daily', [time], nov13(0, 10));
+    expect(keys(dosesForDay([by('04:30')], [taken], nov13(4)))).toEqual([['2026-11-13T04:30', 'taken']]);
+    expect(keys(dosesForDay([by('05:00')], [taken], nov13(4)))).toEqual([['2026-11-13T05:00', 'due']]);
+    expect(keys(dosesForDay([by('05:00')], [taken], nov13(4), NOV12))).toEqual([['2026-11-12T23:00', 'taken']]);
+  });
+
+  it('moves only the evening dose of a twice daily schedule', () => {
+    const s = med({ frequency: 'twice-daily', scheduleTimes: ['08:00', '20:00'] });
+    const records = [dose(NOV12, '08:00'), dose(NOV12, '20:00')];
+    // At 00:10 both doses are moved 5 hours later
+    const later = changeTimes(s, 'twice-daily', ['01:00', '13:00'], nov13(0, 10));
+    expect(keys(dosesForDay([later], records, nov13(0, 15), NOV12))).toEqual([['2026-11-12T08:00', 'taken']]);
+    expect(keys(dosesForDay([later], records, nov13(0, 15)))).toEqual([
+      ['2026-11-13T01:00', 'taken'],
+      ['2026-11-13T13:00', 'upcoming'],
+    ]);
+  });
+});
+
 describe('never hides a dose that is really due', () => {
   it('keeps tonight’s dose due after a dose taken just after midnight moves to the evening', () => {
     // 00:30 dose taken at 00:35 (last night's), then moved to 23:00 at 01:00
@@ -258,4 +330,23 @@ describe('moves across midnight on clock change nights', () => {
       expect(keys(dosesForDay([moved], records, noon))).toEqual([[dueKey(changeDay, time), 'taken']]);
     }
   });
+
+  it.each(changeDays)(
+    'moves a bedtime dose to the same night when the edit is just after midnight on %s',
+    changeDay => {
+      for (const time of ['00:30', '02:30']) {
+        const eve = addDays(changeDay, -1);
+        const records = [dose(addDays(eve, -2), '23:00'), dose(addDays(eve, -1), '23:00'), dose(eve, '23:00')];
+        const on = (h: number, min: number) =>
+          new Date(changeDay.getFullYear(), changeDay.getMonth(), changeDay.getDate(), h, min);
+        // Where midnight does not exist, these times fall an hour later, still before the new time
+        const moved = changeTimes(med({ startDate: addDays(eve, -10).toISOString() }), 'daily', [time], on(0, 10));
+        const list = checklistDoses([moved], records, on(0, 20));
+        expect(list.find(s => s.key === dueKey(changeDay, time))).toMatchObject({ state: 'taken', record: records[2] });
+        expect(dueNow(list)).toEqual([]);
+        expect(adherenceFor(moved, records, 4, on(12, 0))).toMatchObject({ expected: 3, taken: 3 });
+        expect(keys(dosesForDay([moved], records, on(12, 0)))).toEqual([[dueKey(changeDay, time), 'taken']]);
+      }
+    },
+  );
 });

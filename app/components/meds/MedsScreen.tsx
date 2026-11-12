@@ -828,9 +828,9 @@ function SlotRow({
 }
 
 /**
- * The time a dose was taken, read on the day nearest to when it was due. Each whole time is saved
- * as it is entered. A time that has not come yet is not saved, and leaving the field puts back the
- * saved time.
+ * The time a dose was taken, read by takenAt: up to 8 hours before the dose was due, or else later,
+ * on the next day if need be. Each whole time is saved as it is entered. A time that has not come
+ * yet is not saved, and leaving the field puts back the saved time.
  */
 function TakenTime({
   due,

@@ -29,6 +29,12 @@
 // dose taken late cannot land on an afternoon slot. A record that finds no free slot stays at its
 // own time on its own day, so every record counts once and shows in that day's list.
 //
+// An edit made after midnight leaves the day before with its old times, so a record there keeps its
+// slot. When the edit replaced the record's time with a time less than 6 hours later that night, as
+// when a 23:00 dose is taken and its time moved to 00:30 at 00:10, a taken or skipped record moves
+// to that slot when it is free and counts, and its own slot is dropped. So the same night's dose is
+// not offered twice, whether the time was moved before or after midnight.
+//
 // A slot with a record always counts. A slot with no record does not count, and is never shown as
 // due or overdue, when it fell before startDate, during a pause, or at a time that was not in the
 // schedule at that moment. Otherwise it counts as missed once its 2 hour window has closed.
@@ -43,6 +49,8 @@ const MISSED_AFTER = 2 * HOUR;
 const NIGHT_REACH = 6 * HOUR;
 /** Days around the ones asked for that are matched too, so a record can move across midnight. */
 const MARGIN_DAYS = 2;
+/** A time typed for when a dose was taken reads as early only up to this long before it was due. */
+const EARLY_REACH = 8 * HOUR;
 
 /** Doses from today and this many days before it can be recorded or changed in the dose list. */
 export const RECENT_DAYS = 7;
@@ -177,7 +185,8 @@ function slotsBetween(
     else leftover.push(r);
   }
 
-  const pairs: { r: MedicationAdherence; slot: Slot; distance: number; otherDay: boolean }[] = [];
+  // `from` is set for a record that keeps its own slot unless it moves
+  const pairs: { r: MedicationAdherence; slot: Slot; distance: number; otherDay: boolean; from?: Slot }[] = [];
   for (const r of leftover) {
     const i = index.get(r.scheduledTime.slice(0, 10))!;
     const time = r.scheduledTime.slice(11);
@@ -196,6 +205,20 @@ function slotsBetween(
       }
     }
   }
+  // A taken or skipped dose that an edit after midnight moved to a time less than 6 hours later
+  // that night. Its own day keeps its old times, so the record still has its slot there.
+  slots.forEach((list, i) => {
+    for (const from of list) {
+      if (!from.record || statusRank(from.record) === 0) continue;
+      const then = versionAt(versions, from.due.getTime()).times;
+      for (const slot of slots[i + 1] ?? []) {
+        const distance = slot.due.getTime() - from.due.getTime();
+        if (slot.record || !slot.expected || distance >= NIGHT_REACH || then.includes(slot.time)) continue;
+        if (versionAt(versions, slot.due.getTime()).times.includes(from.time)) continue;
+        pairs.push({ r: from.record, slot, distance, otherDay: true, from });
+      }
+    }
+  });
   // Nearest first. On a tie the record's own day wins, then the earlier slot.
   pairs.sort(
     (a, b) =>
@@ -205,10 +228,12 @@ function slotsBetween(
       a.r.scheduledTime.localeCompare(b.r.scheduledTime),
   );
   const placed = new Set<MedicationAdherence>();
-  for (const { r, slot } of pairs) {
+  const left = new Set<Slot>();
+  for (const { r, slot, from } of pairs) {
     if (slot.record || placed.has(r)) continue;
     slot.record = r;
     placed.add(r);
+    if (from) left.add(from);
   }
   for (const r of leftover) {
     if (placed.has(r)) continue;
@@ -221,7 +246,8 @@ function slotsBetween(
       expected: false,
     });
   }
-  return slots.slice(MARGIN_DAYS, MARGIN_DAYS + Math.max(0, count));
+  // A slot whose record moved to the next night is dropped, so the dose shows and counts once
+  return slots.slice(MARGIN_DAYS, MARGIN_DAYS + Math.max(0, count)).map(list => list.filter(x => !left.has(x)));
 }
 
 function isAfterEnd(s: MedicationSchedule, day: Date): boolean {
@@ -368,15 +394,17 @@ export function doseRecord(
 }
 
 /**
- * When a dose was taken, from an "HH:mm" time the person entered. It is that time on the day before,
- * the day of, or the day after the dose was due, whichever is nearest to when it was due, so 00:30
- * for a dose due at 23:00 is the next morning. Null when the time is not valid.
+ * When a dose was taken, from an "HH:mm" time the person entered. Doses are taken late far more often
+ * than early, so it is the earliest of that time on the day before, the day of and the day after the
+ * dose was due that is no more than 8 hours before it was due. So 00:30 for a dose due at 23:00 is
+ * the next morning, 23:50 for a dose due at 00:30 is the evening before, and 21:00 for a dose due
+ * at 08:00 is that evening. Null when the time is not valid.
  */
 export function takenAt(due: Date, time: string): Date | null {
   if (!TIME.test(time)) return null;
   const options = [-1, 0, 1].map(n => dueKeyToDate(dueKey(addDays(due, n), time)));
-  const distance = (d: Date) => Math.abs(d.getTime() - due.getTime());
-  return options.reduce((best, d) => (distance(d) < distance(best) ? d : best));
+  // The day after always qualifies, as it is after the dose was due
+  return options.find(d => d.getTime() >= due.getTime() - EARLY_REACH) ?? options[2];
 }
 
 export interface Adherence {

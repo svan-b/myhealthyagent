@@ -187,13 +187,23 @@ describe('recent doses for the dose list', () => {
 });
 
 describe('a time typed for when a dose was taken', () => {
-  it('is read on the day nearest to when the dose was due', () => {
+  it('is read across midnight for a dose due near it, and on its own day otherwise', () => {
     expect(takenAt(nov11(23), '00:30')).toEqual(nov12(0, 30));
     expect(takenAt(nov11(23), '22:15')).toEqual(nov11(22, 15));
     expect(takenAt(nov12(0, 30), '23:50')).toEqual(nov11(23, 50));
     expect(takenAt(nov12(8), '13:30')).toEqual(nov12(13, 30));
-    // Exactly 12 hours either way: the earlier one
-    expect(takenAt(nov12(20), '08:00')).toEqual(nov12(8));
+  });
+
+  it('is read as late rather than early when the dose was taken many hours from when it was due', () => {
+    // A morning dose taken that evening, not the evening before
+    expect(takenAt(nov12(8), '21:00')).toEqual(nov12(21));
+    expect(takenAt(nov12(8), '23:30')).toEqual(nov12(23, 30));
+    // An evening dose taken the next morning, and one taken a few hours early
+    expect(takenAt(nov12(20), '08:00')).toEqual(at(2026, 11, 13, 8));
+    expect(takenAt(nov12(20), '13:00')).toEqual(nov12(13));
+    // Up to 8 hours early. 23:59 the evening before would be a minute more, so it is read as late.
+    expect(takenAt(nov12(8), '00:00')).toEqual(nov12(0));
+    expect(takenAt(nov12(8), '23:59')).toEqual(nov12(23, 59));
   });
 
   it('is null when it is not a time', () => {
