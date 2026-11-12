@@ -1,11 +1,17 @@
 // lib/report/pdf.ts
 // Clinician report. Generated entirely in the browser; nothing is uploaded.
+//
+// The overview, symptom table, chart, medications and entries cover the chosen period. Possible
+// triggers and other patterns use the same data as the Insights screen, so the person and their
+// clinician see the same findings, and each says which dates it is based on.
 import type { Factor, MedicationAdherence, MedicationSchedule, Symptom } from '@/lib/db/schema';
 import { findTriggers } from '@/lib/analysis/triggers';
-import { dailySeries, getPatterns, summarizeSymptoms } from '@/lib/analysis/patterns';
-import { adherenceFor, dosesAsFactors } from '@/lib/medication/doses';
+import { dailySeries, getPatterns, summarizeSymptoms, type PatternInsight } from '@/lib/analysis/patterns';
+import { dosesAsFactors } from '@/lib/medication/doses';
 import { CATEGORY_LABELS } from '@/lib/catalog';
 import { formatDuration, severityLabel } from '@/lib/utils';
+import { createPrinter, REPLACEMENT } from './printable';
+import { doseSummary, fmtClock, fmtDate, fmtDay, fmtDayTime, fmtRange, methodNote, triggerText } from './text';
 
 export interface ReportInput {
   symptoms: Symptom[];
@@ -16,6 +22,30 @@ export interface ReportInput {
   patientName?: string;
   now?: Date;
 }
+
+export interface Report {
+  blob: Blob;
+  /** True when some characters, such as emoji, could not be printed and show as a replacement mark. */
+  replacedCharacters: boolean;
+}
+
+/**
+ * Everything the report loads on demand. preloadReportLibs loads the same list, so once the app has
+ * been open online the service worker has all of it and reports also work offline.
+ */
+const loadReportLibs = () => Promise.all([import('jspdf'), import('jspdf-autotable'), import('./noto-sans')]);
+
+/** Loads the report libraries and fonts without making a report, so the service worker caches them for offline use. */
+export const preloadReportLibs = () => loadReportLibs();
+
+/** How far back trigger finding looks. The Insights screen uses the same default. */
+const TRIGGER_LOOKBACK_DAYS = 180;
+/** Days back from today, today included, that the weekday and together patterns use (see patterns.ts). */
+const PATTERN_DAYS = 60;
+/** Days back from today, today included, that the trend patterns compare (see patterns.ts). */
+const TREND_DAYS = 28;
+/** At most this many entries are listed. */
+const MAX_LOG_ROWS = 400;
 
 type RGB = [number, number, number];
 const INK: RGB = [15, 28, 42];
@@ -30,26 +60,162 @@ const SEV: RGB[] = [
 ];
 const sevRGB = (v: number): RGB => (v <= 3 ? SEV[0] : v <= 6 ? SEV[1] : v <= 8 ? SEV[2] : SEV[3]);
 
-const fmtDate = (d: Date) => d.toLocaleDateString(undefined, { year: 'numeric', month: 'short', day: 'numeric' });
-const fmtDateTime = (iso: string) =>
-  new Date(iso).toLocaleString(undefined, { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' });
+const FONT = 'NotoSans';
+const key = (name: string) => name.trim().toLowerCase();
+const categoryLabel = (c: Factor['category']) => (CATEGORY_LABELS[c] ?? CATEGORY_LABELS.other).toLowerCase();
 
-export async function buildReport(input: ReportInput): Promise<Blob> {
-  const [{ default: jsPDF }, { default: autoTable }] = await Promise.all([import('jspdf'), import('jspdf-autotable')]);
+export async function buildReport(input: ReportInput): Promise<Report> {
+  const [{ default: jsPDF }, { default: autoTable }, fonts] = await loadReportLibs();
   const now = input.now ?? new Date();
+  const nowMs = now.getTime();
   const from = new Date(now.getFullYear(), now.getMonth(), now.getDate() - (input.days - 1));
-  const inPeriod = <T extends { timestamp: string }>(rows: T[]) =>
-    rows.filter(r => {
-      const t = Date.parse(r.timestamp);
-      return t >= from.getTime() && t <= now.getTime();
-    });
+  const fromMs = from.getTime();
+  const daysBack = (n: number) => new Date(now.getFullYear(), now.getMonth(), now.getDate() - (n - 1)).getTime();
+  const at = (r: { timestamp: string }) => Date.parse(r.timestamp);
+  const inPeriod = <T extends { timestamp: string }>(rows: T[]) => rows.filter(r => at(r) >= fromMs && at(r) <= nowMs);
+  const upToNow = <T extends { timestamp: string }>(rows: T[]) => rows.filter(r => at(r) <= nowMs);
+
+  // Every piece of text from the person's data goes through print() before it is drawn. Content is
+  // worked out first, so the note about replaced characters near the top is known before drawing.
+  const printer = createPrinter(fonts.COVERAGE);
+  const print = (text: string) => printer.print(text);
 
   const symptoms = inPeriod(input.symptoms);
   const factors = inPeriod(input.factors);
-  const doc = new jsPDF({ unit: 'pt', format: 'letter' });
+  const doseFactors = dosesAsFactors(input.doses);
+
+  /** "Based on logs from Jun 1 to Nov 12, 2026." for the logs at or after `start`, or null without any. */
+  const basedOn = (times: number[], start = -Infinity) => {
+    let first = Infinity;
+    let last = -Infinity;
+    for (const t of times) {
+      if (!(t >= start && t <= nowMs)) continue;
+      first = Math.min(first, t);
+      last = Math.max(last, t);
+    }
+    return first <= last ? `Based on logs from ${fmtRange(new Date(first), new Date(last))}.` : null;
+  };
+  const logTimes = [...input.symptoms, ...input.factors].map(at);
+
+  // Overview
+  const activeDays = new Set([...symptoms, ...factors].map(r => new Date(r.timestamp).toDateString())).size;
+  const symptomDays = new Set(symptoms.map(s => new Date(s.timestamp).toDateString())).size;
+
+  // Symptoms
+  const summaryRows = summarizeSymptoms(symptoms).map(s => {
+    const durations = symptoms
+      .filter(x => key(x.name) === key(s.name) && x.duration_minutes)
+      .map(x => x.duration_minutes as number)
+      .sort((a, b) => a - b);
+    const median = durations.length ? durations[Math.floor(durations.length / 2)] : undefined;
+    return [
+      print(s.name),
+      String(s.days),
+      String(s.count),
+      severityLabel(s.typicalSeverity),
+      severityLabel(s.maxSeverity),
+      formatDuration(median) ?? 'Not recorded',
+    ];
+  });
+
+  // Possible triggers, from the same data as the Insights screen. Doses are tested as possible side
+  // effects, but a day with only a ticked dose does not count as tracked.
+  const triggers = findTriggers(input.symptoms, input.factors, {
+    now,
+    lookbackDays: TRIGGER_LOOKBACK_DAYS,
+    exposureOnly: doseFactors,
+  });
+  const triggerBasis = basedOn(logTimes, nowMs - TRIGGER_LOOKBACK_DAYS * 86_400_000);
+  const words = triggerText(triggers);
+  const triggerRows = triggers.findings.map(f => [
+    print(`${f.factor} (${categoryLabel(f.category)})`),
+    print(f.symptom),
+    f.window.label,
+    `${f.exposuresFollowed} of ${f.exposures} times (${Math.round((f.exposuresFollowed / f.exposures) * 100)}%)`,
+    `${Math.round(f.baselineChance * 100)}%`,
+    f.strength === 'strong' ? 'Strong' : f.strength === 'moderate' ? 'Moderate' : 'Weak',
+  ]);
+  // A finding can come from before the period, such as a food the person has since stopped. Say so.
+  const lastLogged = (rows: { name: string; timestamp: string }[], name: string) => {
+    let last = -Infinity;
+    for (const r of rows) if (key(r.name) === key(name) && at(r) <= nowMs) last = Math.max(last, at(r));
+    return last;
+  };
+  const beforePeriod: string[] = [];
+  const noted = new Set<string>();
+  for (const f of triggers.findings) {
+    for (const [name, last] of [
+      [f.factor, lastLogged([...input.factors, ...doseFactors], f.factor)],
+      [f.symptom, lastLogged(input.symptoms, f.symptom)],
+    ] as const) {
+      if (last >= fromMs || noted.has(key(name))) continue;
+      noted.add(key(name));
+      beforePeriod.push(print(`${name} was last logged on ${fmtDate(new Date(last))}, before this report’s period.`));
+    }
+  }
+  const triggerLead = words.lead && print(words.lead);
+  const triggerChecked = words.checked.map(print);
+  const triggerNotChecked = words.notChecked.map(print);
+
+  // Other patterns, from the same data as the Insights screen. Each kind looks at its own days. Time of
+  // day looks at every symptom logged.
+  const patternBasis = (kind: PatternInsight['kind']) =>
+    kind === 'time-of-day'
+      ? basedOn(input.symptoms.map(at))
+      : basedOn(logTimes, daysBack(kind === 'trend' ? TREND_DAYS : PATTERN_DAYS));
+  const patterns = getPatterns(upToNow(input.symptoms), upToNow(input.factors), now).map(p => ({
+    title: print(p.title),
+    detail: print(p.detail),
+    basis: patternBasis(p.kind),
+  }));
+
+  // Medications, for the period. The longest period adherence covers is 90 days.
+  const medDays = Math.min(input.days, 90);
+  const medFrom = new Date(now.getFullYear(), now.getMonth(), now.getDate() - (medDays - 1));
+  const medRows = input.schedules.map(m => [
+    print(m.medicationName),
+    print(m.dosage || ''),
+    m.frequency === 'as-needed' ? 'As needed' : m.scheduleTimes.map(fmtClock).join(', '),
+    doseSummary(m, input.doses, medDays, medFrom, now),
+  ]);
+
+  // Entries, newest first. Only the rows that are listed are printed.
+  const log = [
+    ...symptoms.map(s => ({
+      t: at(s),
+      row: () => [
+        fmtDayTime(new Date(s.timestamp)),
+        print(s.name),
+        severityLabel(s.severity),
+        formatDuration(s.duration_minutes, s.ongoing) ?? '',
+        print(s.notes ?? ''),
+      ],
+    })),
+    ...factors.map(f => ({
+      t: at(f),
+      row: () => [
+        fmtDayTime(new Date(f.timestamp)),
+        print(`${f.name} (${categoryLabel(f.category)})`),
+        '',
+        '',
+        print(f.notes ?? ''),
+      ],
+    })),
+  ].sort((a, b) => b.t - a.t);
+  const logRows = log.slice(0, MAX_LOG_ROWS).map(l => l.row());
+  const patientName = input.patientName ? print(input.patientName) : null;
+
+  // Drawing
+  // Compressed, because text in an embedded font takes four times the room of plain text.
+  const doc = new jsPDF({ unit: 'pt', format: 'letter', compress: true });
+  doc.addFileToVFS('NotoSans-Regular.ttf', fonts.NOTO_SANS_REGULAR);
+  doc.addFont('NotoSans-Regular.ttf', FONT, 'normal');
+  doc.addFileToVFS('NotoSans-Bold.ttf', fonts.NOTO_SANS_BOLD);
+  doc.addFont('NotoSans-Bold.ttf', FONT, 'bold');
   const W = doc.internal.pageSize.getWidth();
   const H = doc.internal.pageSize.getHeight();
   const M = 48;
+  const width = W - 2 * M;
   let y = M;
 
   const ensure = (space: number) => {
@@ -58,11 +224,12 @@ export async function buildReport(input: ReportInput): Promise<Blob> {
       y = M;
     }
   };
-  const heading = (text: string) => {
-    ensure(40);
+  /** A section heading. `keep` is the room the start of the section needs, so a heading never ends a page. */
+  const heading = (text: string, keep = 60) => {
+    ensure(34 + keep);
     y += 10;
     doc
-      .setFont('helvetica', 'bold')
+      .setFont(FONT, 'bold')
       .setFontSize(13)
       .setTextColor(...INK)
       .text(text, M, y);
@@ -73,22 +240,27 @@ export async function buildReport(input: ReportInput): Promise<Blob> {
       .line(M, y, W - M, y);
     y += 16;
   };
-  const para = (text: string, size = 10, color: RGB = INK) => {
+  /** A paragraph, wrapped to the page. `indent` moves it right, and `bullet` puts a dot before its first line. */
+  const para = (text: string, { size = 10, color = INK, bold = false, indent = 0, bullet = false, after = 0 } = {}) => {
     doc
-      .setFont('helvetica', 'normal')
+      .setFont(FONT, bold ? 'bold' : 'normal')
       .setFontSize(size)
       .setTextColor(...color);
-    const lines = doc.splitTextToSize(text, W - 2 * M) as string[];
-    for (const line of lines) {
+    const lines = doc.splitTextToSize(print(text), width - indent) as string[];
+    // A short paragraph stays on one page.
+    if (lines.length <= 8) ensure(lines.length * (size + 4));
+    lines.forEach((line, i) => {
       ensure(size + 4);
-      doc.text(line, M, y);
+      if (bullet && i === 0) doc.text('•', M + indent - 9, y);
+      doc.text(line, M + indent, y);
       y += size + 4;
-    }
+    });
+    y += after;
   };
   const tableDefaults = {
     margin: { left: M, right: M, bottom: 60 },
     styles: {
-      font: 'helvetica',
+      font: FONT,
       fontSize: 9,
       cellPadding: 5,
       textColor: INK,
@@ -99,6 +271,20 @@ export async function buildReport(input: ReportInput): Promise<Blob> {
     headStyles: { fillColor: [238, 242, 245] as RGB, textColor: INK, fontStyle: 'bold' as const },
     theme: 'grid' as const,
   };
+  /**
+   * A table where every column but `auto` has a fixed width. The one free column takes the rest, so a
+   * long word in one cell can never squeeze another column down to a letter per line.
+   */
+  const table = (head: string[], body: string[][], widths: (number | 'auto')[]) => {
+    autoTable(doc, {
+      ...tableDefaults,
+      startY: y,
+      head: [head],
+      body: body.map(row => row.map(print)),
+      columnStyles: Object.fromEntries(widths.map((w, i) => [i, { cellWidth: w }])),
+    });
+    afterTable();
+  };
   const afterTable = () => {
     y = ((doc as unknown as { lastAutoTable?: { finalY: number } }).lastAutoTable?.finalY ?? y) + 18;
   };
@@ -106,34 +292,26 @@ export async function buildReport(input: ReportInput): Promise<Blob> {
   // Title block
   doc.setFillColor(...ACCENT).rect(0, 0, W, 6, 'F');
   doc
-    .setFont('helvetica', 'bold')
+    .setFont(FONT, 'bold')
     .setFontSize(20)
     .setTextColor(...INK)
     .text('Symptom summary', M, y + 10);
   y += 30;
-  doc
-    .setFont('helvetica', 'normal')
-    .setFontSize(10)
-    .setTextColor(...MUTED);
   const meta = [
-    input.patientName ? `Patient: ${input.patientName}` : null,
-    `Period: ${fmtDate(from)} to ${fmtDate(now)} (${input.days} days)`,
+    patientName ? `Patient: ${patientName}` : null,
+    `Period: ${fmtRange(from, now)} (${input.days} days)`,
     `Prepared: ${fmtDate(now)}`,
-  ].filter(Boolean) as string[];
-  meta.forEach(line => {
-    doc.text(line, M, y);
-    y += 14;
-  });
+  ].filter((line): line is string => line !== null);
+  meta.forEach(line => para(line, { color: MUTED }));
   y += 4;
   para(
-    'Recorded by the patient in the myHealthyAgent app. Severity is self-rated (mild, moderate, severe, very severe). Possible triggers are statistical associations in this person’s own logs, not diagnoses.',
-    9,
-    MUTED,
+    `Recorded by the patient in the myHealthyAgent app. Severity is self-rated (mild, moderate, severe, very severe). Possible triggers are statistical associations in this person’s own logs, not diagnoses.${
+      printer.replaced ? ` Characters that could not be printed, such as emoji, show as ${REPLACEMENT}.` : ''
+    }`,
+    { size: 9, color: MUTED },
   );
 
   // Overview
-  const activeDays = new Set([...symptoms, ...factors].map(r => new Date(r.timestamp).toDateString())).size;
-  const symptomDays = new Set(symptoms.map(s => new Date(s.timestamp).toDateString())).size;
   heading('Overview');
   autoTable(doc, {
     ...tableDefaults,
@@ -151,45 +329,34 @@ export async function buildReport(input: ReportInput): Promise<Blob> {
   afterTable();
 
   // Symptoms
-  heading('Symptoms');
-  const summary = summarizeSymptoms(symptoms);
-  if (!summary.length) {
+  heading('Symptoms', 70);
+  if (!summaryRows.length) {
     para('No symptoms were logged in this period.');
   } else {
-    autoTable(doc, {
-      ...tableDefaults,
-      startY: y,
-      head: [['Symptom', 'Days', 'Entries', 'Typical severity', 'Worst', 'Typical duration']],
-      body: summary.map(s => {
-        const durations = symptoms
-          .filter(x => x.name.toLowerCase() === s.name.toLowerCase() && x.duration_minutes)
-          .map(x => x.duration_minutes as number)
-          .sort((a, b) => a - b);
-        const median = durations.length ? durations[Math.floor(durations.length / 2)] : undefined;
-        return [
-          s.name,
-          String(s.days),
-          String(s.count),
-          severityLabel(s.avgSeverity),
-          severityLabel(s.maxSeverity),
-          formatDuration(median) ?? 'Not recorded',
-        ];
-      }),
-    });
-    afterTable();
+    table(['Symptom', 'Days', 'Entries', 'Typical severity', 'Worst', 'Typical duration'], summaryRows, [
+      'auto',
+      44,
+      52,
+      76,
+      70,
+      76,
+    ]);
 
     // Daily chart
     const series = dailySeries(symptoms, input.days, now);
+    const label = (date: string) => {
+      const [yy, mm, dd] = date.split('-').map(Number);
+      return fmtDay(new Date(yy, mm - 1, dd));
+    };
     ensure(140);
     doc
-      .setFont('helvetica', 'bold')
+      .setFont(FONT, 'bold')
       .setFontSize(10)
       .setTextColor(...INK)
       .text('Worst severity each day', M, y);
     y += 10;
     const chartH = 80;
-    const chartW = W - 2 * M;
-    const barW = chartW / series.length;
+    const barW = width / series.length;
     doc
       .setDrawColor(...LINE)
       .setLineWidth(0.5)
@@ -203,140 +370,87 @@ export async function buildReport(input: ReportInput): Promise<Blob> {
     });
     y += chartH + 12;
     doc
-      .setFont('helvetica', 'normal')
+      .setFont(FONT, 'normal')
       .setFontSize(8)
       .setTextColor(...MUTED);
-    doc.text(series[0].label, M, y);
-    doc.text(series[series.length - 1].label, W - M, y, { align: 'right' });
+    doc.text(label(series[0].date), M, y);
+    doc.text(label(series[series.length - 1].date), W - M, y, { align: 'right' });
     y += 10;
     let lx = M;
-    ['Mild', 'Moderate', 'Severe', 'Very severe'].forEach((label, i) => {
+    ['Mild', 'Moderate', 'Severe', 'Very severe'].forEach((name, i) => {
       doc.setFillColor(...SEV[i]).rect(lx, y - 6, 8, 8, 'F');
-      doc.text(label, lx + 12, y + 1);
-      lx += doc.getTextWidth(label) + 28;
+      doc.text(name, lx + 12, y + 1);
+      lx += doc.getTextWidth(name) + 28;
     });
     y += 16;
   }
 
   // Triggers
-  heading('Possible triggers');
-  const triggers = findTriggers(input.symptoms, [...input.factors, ...dosesAsFactors(input.doses)], { now });
-  if (!triggers.findings.length) {
-    para(
-      triggers.trackedDays < 14
-        ? 'Not enough logging yet to look for triggers (about two weeks of symptoms plus food, drink and activity logs are needed).'
-        : 'No logged food, drink, activity or medication was followed by a clear rise in any symptom.',
-    );
-  } else {
-    autoTable(doc, {
-      ...tableDefaults,
-      startY: y,
-      head: [['Logged item', 'Symptom', 'Delay', 'Followed by symptom', 'Same hours, other days', 'Signal']],
-      body: triggers.findings.map(f => [
-        `${f.factor} (${CATEGORY_LABELS[f.category].toLowerCase()})`,
-        f.symptom,
-        f.window.label,
-        `${f.exposuresFollowed} of ${f.exposures} times (${Math.round((f.exposuresFollowed / f.exposures) * 100)}%)`,
-        `${Math.round(f.baselineChance * 100)}%`,
-        f.strength === 'strong' ? 'Strong' : f.strength === 'moderate' ? 'Moderate' : 'Weak',
-      ]),
-    });
-    afterTable();
-    para(
-      `Method: symptom start times in each delay window after a logged item were compared with the same hours of the day when the item was not logged (exact test stratified by hour of day), with Benjamini–Hochberg correction across ${triggers.testsRun} comparisons. "Same hours, other days" is how often the symptom appeared in the matching window on nearby days without the item. Medications taken for a symptom will naturally appear linked to it.`,
-      8,
-      MUTED,
-    );
+  heading('Possible triggers', 100);
+  if (triggerBasis) para(triggerBasis, { size: 9, color: MUTED, after: 4 });
+  if (triggerLead) para(triggerLead, { after: 2 });
+  if (triggerRows.length) {
+    table(['Logged item', 'Symptom', 'Delay', 'Followed by symptom', 'Same hours, other days', 'Signal'], triggerRows, [
+      'auto',
+      96,
+      76,
+      90,
+      72,
+      62,
+    ]);
+    y -= 2;
+  }
+  for (const line of beforePeriod) para(line, { size: 9 });
+  for (const line of triggerChecked) para(line, { size: triggerRows.length ? 9 : 10 });
+  if (triggerNotChecked.length) {
+    y += 4;
+    para('Not checked, so not ruled out', { size: 9, bold: true });
+    for (const line of triggerNotChecked) para(line, { size: 9, indent: 10, bullet: true });
+  }
+  if (triggers.testsRun > 0) {
+    y += 4;
+    para(methodNote(triggers.testsRun), { size: 8, color: MUTED });
   }
 
-  const patterns = getPatterns(input.symptoms, input.factors, now);
   if (patterns.length) {
-    heading('Other patterns');
-    patterns.forEach(p => para(`${p.title}. ${p.detail}`));
+    heading('Other patterns', 50);
+    patterns.forEach(p => {
+      ensure(40);
+      para(p.title, { bold: true });
+      para(p.detail);
+      if (p.basis) para(p.basis, { size: 9, color: MUTED });
+      y += 6;
+    });
   }
 
   // Medications
-  const meds = input.schedules;
-  if (meds.length) {
-    heading('Medications');
-    autoTable(doc, {
-      ...tableDefaults,
-      startY: y,
-      head: [['Medication', 'Dose', 'Schedule', `Doses taken (last ${Math.min(input.days, 90)} days)`]],
-      body: meds.map(m => {
-        const a = adherenceFor(m, input.doses, Math.min(input.days, 90), now);
-        const asNeeded = input.doses.filter(
-          d => d.scheduleId === m.id && d.status === 'taken' && Date.parse(d.takenTime ?? '') >= from.getTime(),
-        ).length;
-        return [
-          m.medicationName + (m.isActive ? '' : ' (paused)'),
-          m.dosage || '',
-          m.frequency === 'as-needed' ? 'As needed' : m.scheduleTimes.join(', '),
-          m.frequency === 'as-needed'
-            ? `${asNeeded} doses logged`
-            : !m.isActive
-              ? 'Paused'
-              : a.percent == null
-                ? 'No doses due yet'
-                : `${a.taken} of ${a.expected} (${a.percent}%)`,
-        ];
-      }),
-    });
-    afterTable();
+  if (medRows.length) {
+    heading('Medications', 70);
+    table(['Medication', 'Dose', 'Schedule', `Doses taken (last ${medDays} days)`], medRows, ['auto', 96, 104, 156]);
   }
 
   // Log
-  heading('Entries');
-  const log = [
-    ...symptoms.map(s => ({
-      t: s.timestamp,
-      row: [
-        fmtDateTime(s.timestamp),
-        s.name,
-        severityLabel(s.severity),
-        formatDuration(s.duration_minutes, s.ongoing) ?? '',
-        s.notes ?? '',
-      ],
-    })),
-    ...factors.map(f => ({
-      t: f.timestamp,
-      row: [
-        fmtDateTime(f.timestamp),
-        `${f.name} (${CATEGORY_LABELS[f.category].toLowerCase()})`,
-        '',
-        '',
-        f.notes ?? '',
-      ],
-    })),
-  ].sort((a, b) => b.t.localeCompare(a.t));
+  heading('Entries', 70);
   if (!log.length) {
     para('No entries in this period.');
   } else {
-    autoTable(doc, {
-      ...tableDefaults,
-      startY: y,
-      head: [['When', 'Entry', 'Severity', 'Duration', 'Note']],
-      body: log.slice(0, 400).map(l => l.row),
-      columnStyles: { 0: { cellWidth: 90 }, 2: { cellWidth: 68 }, 3: { cellWidth: 60 } },
-    });
-    afterTable();
-    if (log.length > 400) para(`Showing the 400 most recent of ${log.length} entries.`, 9, MUTED);
+    table(['When', 'Entry', 'Severity', 'Duration', 'Note'], logRows, [92, 130, 64, 58, 'auto']);
+    if (log.length > MAX_LOG_ROWS) {
+      para(`Showing the ${MAX_LOG_ROWS} most recent of ${log.length} entries.`, { size: 9, color: MUTED });
+    }
   }
 
   // Footer on every page
-  const pages = doc.internal.pages.length - 1;
+  const pages = doc.getNumberOfPages();
   for (let i = 1; i <= pages; i++) {
     doc.setPage(i);
     doc
-      .setFont('helvetica', 'normal')
+      .setFont(FONT, 'normal')
       .setFontSize(8)
       .setTextColor(...MUTED);
     doc.text('Patient-recorded data from myHealthyAgent. Not a medical record or diagnosis.', M, H - 28);
     doc.text(`Page ${i} of ${pages}`, W - M, H - 28, { align: 'right' });
   }
 
-  return doc.output('blob');
+  return { blob: doc.output('blob'), replacedCharacters: printer.replaced };
 }
-
-/** Loads the PDF libraries without making a report, so the service worker can cache them for offline use. */
-export const preloadReportLibs = () => Promise.all([import('jspdf'), import('jspdf-autotable')]);

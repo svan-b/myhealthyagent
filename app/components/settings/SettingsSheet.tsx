@@ -16,6 +16,7 @@ import { downloadFile, exportBackup, exportCSV, importBackup } from '@/lib/db/ba
 import { usePro } from '@/lib/pro/client';
 import { config } from '@/lib/config';
 import { errorMessage } from '@/lib/utils';
+import { reportErrorMessage, UNPRINTED_CHARACTERS } from '@/lib/report/messages';
 import { LicenseKeyForm, ManageBilling, UpgradeCard } from '../pro/Upgrade';
 
 const stamp = () => new Date().toISOString().slice(0, 10);
@@ -49,7 +50,7 @@ function Group({ title, children }: { title: string; children: React.ReactNode }
   );
 }
 
-function ReportSection() {
+export function ReportSection() {
   const data = useHealthData();
   const { isPro, enabled } = usePro();
   const [days, setDays] = React.useState<'30' | '90'>('30');
@@ -63,11 +64,15 @@ function ReportSection() {
     try {
       if (name !== (data.prefs.reportName ?? '')) await db.updatePreferences({ reportName: name.trim() || undefined });
       const { buildReport } = await import('@/lib/report/pdf');
-      const blob = await buildReport({ ...data, days: Number(days), patientName: name.trim() || undefined });
-      downloadFile(blob, `symptom-report-${stamp()}.pdf`, 'application/pdf');
-      toast.success('Report downloaded');
+      const report = await buildReport({ ...data, days: Number(days), patientName: name.trim() || undefined });
+      downloadFile(report.blob, `symptom-report-${stamp()}.pdf`, 'application/pdf');
+      toast.success(
+        'Report downloaded',
+        report.replacedCharacters ? { description: UNPRINTED_CHARACTERS, duration: 10_000 } : undefined,
+      );
     } catch (e) {
-      toast.error(errorMessage(e, 'Could not create the report'));
+      // The first report after an update, made offline, cannot load the report code.
+      toast.error(reportErrorMessage(e));
     } finally {
       setBusy(false);
     }

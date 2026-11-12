@@ -7,3 +7,4 @@ coverage
 *.md
 public/offline.html
 .claude
+lib/report/noto-sans.ts

@@ -16,6 +16,8 @@ const eslintConfig = [
       'playwright-report/**',
       'test-results/**',
       '.claude/**',
+      // Generated font data, see the file's header.
+      'lib/report/noto-sans.ts',
     ],
   },
   ...compat.extends('next/core-web-vitals', 'next/typescript'),
