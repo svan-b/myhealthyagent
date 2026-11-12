@@ -41,6 +41,7 @@
     "@types/react-dom": "^19",
     "eslint": "^9",
     "eslint-config-next": "^15.5.29",
+    "fake-indexeddb": "^6.2.8",
     "jest": "^30.0.5",
     "jest-environment-jsdom": "^30.0.5",
     "prettier": "^3.10.0",

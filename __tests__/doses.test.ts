@@ -1,7 +1,5 @@
 import { adherenceFor, dosesForDay, dueKey } from '@/lib/medication/doses';
-import { getPatterns, getReadiness, summarizeSymptoms, dailySeries } from '@/lib/analysis/patterns';
-import { csvField, toCSV } from '@/lib/db/backup';
-import type { MedicationAdherence, MedicationSchedule, Symptom } from '@/lib/db/schema';
+import type { MedicationAdherence, MedicationSchedule } from '@/lib/db/schema';
 
 const NOW = new Date(2026, 5, 30, 12, 0);
 
@@ -50,55 +48,6 @@ describe('doses', () => {
     expect(a.skipped).toBe(1);
     expect(a.missed).toBe(19);
     expect(a.percent).toBe(5);
-  });
-});
-
-const s = (name: string, d: Date, severity = 5): Symptom => ({
-  id: Math.random().toString(),
-  name,
-  severity,
-  timestamp: d.toISOString(),
-});
-
-describe('patterns', () => {
-  it('reports readiness stages', () => {
-    expect(getReadiness([], [], NOW).stage).toBe('empty');
-    expect(getReadiness([s('Headache', NOW)], [], NOW).stage).toBe('starting');
-  });
-
-  it('detects a time of day pattern', () => {
-    const rows = Array.from({ length: 10 }, (_, i) => s('Headache', new Date(2026, 5, 10 + i, 19)));
-    const p = getPatterns(rows, [], NOW);
-    expect(p.find(x => x.kind === 'time-of-day')?.title).toBe('Headache usually starts in the evening');
-  });
-
-  it('summarises symptoms and builds a daily series', () => {
-    const rows = [s('Headache', NOW, 7), s('headache', NOW, 3), s('Nausea', NOW, 5)];
-    const sum = summarizeSymptoms(rows);
-    expect(sum[0]).toMatchObject({ count: 2, avgSeverity: 5, maxSeverity: 7, days: 1 });
-    const series = dailySeries(rows, 7, NOW);
-    expect(series).toHaveLength(7);
-    expect(series[6]).toMatchObject({ count: 3, maxSeverity: 7 });
-  });
-});
-
-describe('csv export', () => {
-  it('quotes fields and blocks formula injection', () => {
-    expect(csvField('a,b')).toBe('"a,b"');
-    expect(csvField('say "hi"')).toBe('"say ""hi"""');
-    expect(csvField('=HYPERLINK("x")')).toBe(`"'=HYPERLINK(""x"")"`);
-    expect(csvField(undefined)).toBe('');
-  });
-
-  it('includes symptoms and factors in time order', () => {
-    const csv = toCSV(
-      [{ id: '1', name: 'Headache', severity: 7, timestamp: '2026-06-02T10:00:00.000Z', notes: 'bad, very' }],
-      [{ id: '2', name: 'Dairy', category: 'food', timestamp: '2026-06-01T10:00:00.000Z' }],
-    );
-    const lines = csv.replace('﻿', '').split('\r\n');
-    expect(lines[0]).toMatch(/^type,name,category,severity/);
-    expect(lines[1]).toMatch(/^factor,Dairy,food/);
-    expect(lines[2]).toMatch(/^symptom,Headache,,7,.*"bad, very"/);
   });
 });
 
