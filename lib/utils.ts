@@ -16,11 +16,12 @@ export function newId(): string {
   return `${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}-${Math.random().toString(36).slice(2, 10)}`;
 }
 
+/** Fill (color) and text color (on) of a chosen severity button. The pair stays readable in both themes. */
 export const SEVERITY_LEVELS = [
-  { value: 2, label: 'Mild', hint: 'Noticeable, not limiting', color: 'var(--sev-1)' },
-  { value: 5, label: 'Moderate', hint: 'Gets in the way', color: 'var(--sev-2)' },
-  { value: 7, label: 'Severe', hint: 'Hard to function', color: 'var(--sev-3)' },
-  { value: 9, label: 'Very severe', hint: 'Can’t do much at all', color: 'var(--sev-4)' },
+  { value: 2, label: 'Mild', hint: 'Noticeable, not limiting', color: 'var(--sev-1)', on: 'var(--on-sev-1)' },
+  { value: 5, label: 'Moderate', hint: 'Gets in the way', color: 'var(--sev-2)', on: 'var(--on-sev-2)' },
+  { value: 7, label: 'Severe', hint: 'Hard to function', color: 'var(--sev-3)', on: 'var(--on-sev-3)' },
+  { value: 9, label: 'Very severe', hint: 'Can’t do much at all', color: 'var(--sev-4)', on: 'var(--on-sev-4)' },
 ] as const;
 
 export function severityLabel(value: number): string {

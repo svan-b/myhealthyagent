@@ -123,6 +123,8 @@ export function HistoryScreen() {
               {items.map(r => (
                 <button
                   key={r.kind === 'symptom' ? r.s.id : r.f.id}
+                  // Lets the edit sheet find this entry again when a new date moves it to another day.
+                  id={`entry-${r.kind}-${r.kind === 'symptom' ? r.s.id : r.f.id}`}
                   type="button"
                   onClick={() => setEditing(r)}
                   className="w-full flex items-start gap-3 px-4 py-3 text-left hover:bg-surface-2 transition-colors"

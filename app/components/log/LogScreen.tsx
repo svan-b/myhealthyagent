@@ -7,8 +7,8 @@ import { Button } from '@/components/ui/button';
 import { Chip, Segmented } from '@/components/ui/chip';
 import { Input, Select, Textarea } from '@/components/ui/field';
 import { Card, SectionTitle } from '@/components/ui/card';
-import { WhenPicker } from './WhenPicker';
-import { db, requestPersistentStorage } from '@/lib/db/client';
+import { WHEN_NOW, WhenPicker, resolveWhen, type When } from './WhenPicker';
+import { cleanName, db, requestPersistentStorage } from '@/lib/db/client';
 import { useHealthData } from '@/lib/hooks/useHealthData';
 import { COMMON_SYMPTOMS, DURATION_OPTIONS, FACTOR_GROUPS, CATEGORY_LABELS } from '@/lib/catalog';
 import type { FactorCategory } from '@/lib/db/schema';
@@ -74,10 +74,11 @@ function SymptomFlow() {
   const [custom, setCustom] = React.useState('');
   const [severity, setSeverity] = React.useState<number | null>(null);
   const [duration, setDuration] = React.useState(0);
-  const [when, setWhen] = React.useState<Date | null>(null);
+  const [when, setWhen] = React.useState<When>(WHEN_NOW);
   const [note, setNote] = React.useState('');
   const [showNote, setShowNote] = React.useState(false);
   const [saving, setSaving] = React.useState(false);
+  const timeMissing = resolveWhen(when) === null;
 
   const options = React.useMemo(() => {
     const seen = new Set<string>();
@@ -95,18 +96,25 @@ function SymptomFlow() {
     setDuration(0);
     setNote('');
     setShowNote(false);
-    setWhen(null);
+    setWhen(WHEN_NOW);
   };
 
   const pickCustom = () => {
-    const v = custom.trim();
+    const v = cleanName(custom);
     if (!v) return;
-    setName(v);
+    // Typing a symptom that is already listed uses the listed spelling, so History shows one name for it.
+    setName(options.find(o => o.toLowerCase() === v.toLowerCase()) ?? v);
     setCustom('');
   };
 
   const save = async () => {
     if (!name || severity == null) return;
+    // Work out the time now, so "1 hr ago" means an hour before Save was tapped.
+    const at = resolveWhen(when);
+    if (!at) {
+      toast.error('Please enter a valid date and time');
+      return;
+    }
     setSaving(true);
     const d = DURATION_OPTIONS[duration];
     try {
@@ -114,7 +122,7 @@ function SymptomFlow() {
         id: newId(),
         name,
         severity,
-        timestamp: (when ?? new Date()).toISOString(),
+        timestamp: at.toISOString(),
         duration_minutes: d.minutes,
         ongoing: d.ongoing,
         notes: note,
@@ -164,13 +172,7 @@ function SymptomFlow() {
             autoComplete="off"
             enterKeyHint="next"
           />
-          <Button
-            type="submit"
-            variant="secondary"
-            disabled={!custom.trim()}
-            className="h-12 shrink-0"
-            aria-label="Use this symptom"
-          >
+          <Button type="submit" variant="secondary" disabled={!custom.trim()} className="h-12 shrink-0">
             <Plus /> Add
           </Button>
         </form>
@@ -181,7 +183,7 @@ function SymptomFlow() {
   return (
     <div className="space-y-5">
       <div className="flex items-center gap-2">
-        <Button variant="quiet" size="sm" onClick={reset} className="-ml-2" aria-label="Choose a different symptom">
+        <Button variant="quiet" size="sm" onClick={reset} className="-ml-2">
           <ChevronLeft /> Back
         </Button>
         <h2 className="text-xl font-bold text-fg truncate">{name}</h2>
@@ -200,9 +202,10 @@ function SymptomFlow() {
                 onClick={() => setSeverity(l.value)}
                 className={cn(
                   'min-h-20 rounded-xl border-2 p-3 text-left transition-colors',
-                  selected ? 'text-white' : 'bg-surface border-line-strong hover:border-accent',
+                  !selected && 'bg-surface border-line-strong hover:border-accent',
                 )}
-                style={selected ? { backgroundColor: l.color, borderColor: l.color } : undefined}
+                // The text color is set per level and theme so the label and hint stay readable on the fill.
+                style={selected ? { backgroundColor: l.color, borderColor: l.color, color: l.on } : undefined}
               >
                 <span className="flex items-center gap-2 font-semibold">
                   {!selected && (
@@ -210,16 +213,14 @@ function SymptomFlow() {
                   )}
                   {l.label}
                 </span>
-                <span className={cn('block text-[13px] mt-0.5', selected ? 'text-white/90' : 'text-muted')}>
-                  {l.hint}
-                </span>
+                <span className={cn('block text-[13px] mt-0.5', !selected && 'text-muted')}>{l.hint}</span>
               </button>
             );
           })}
         </div>
       </fieldset>
 
-      <WhenPicker onChange={setWhen} label="When did it start?" />
+      <WhenPicker value={when} onChange={setWhen} label="When did it start?" />
 
       <fieldset>
         <legend className="text-sm font-semibold text-fg mb-2">How long did it last?</legend>
@@ -258,8 +259,14 @@ function SymptomFlow() {
       )}
 
       <div className="sticky bottom-[calc(4.75rem+env(safe-area-inset-bottom))] pt-2 bg-gradient-to-t from-bg via-bg to-transparent">
-        <Button block size="lg" onClick={save} disabled={severity == null || saving}>
-          {saving ? 'Saving…' : severity == null ? 'Choose how bad it is' : `Save ${name.toLowerCase()}`}
+        <Button block size="lg" onClick={save} disabled={severity == null || timeMissing || saving}>
+          {saving
+            ? 'Saving…'
+            : severity == null
+              ? 'Choose how bad it is'
+              : timeMissing
+                ? 'Enter a date and time'
+                : `Save ${name.toLowerCase()}`}
         </Button>
       </div>
     </div>
@@ -269,11 +276,12 @@ function SymptomFlow() {
 function FactorFlow() {
   const { prefs } = useHealthData();
   const [selected, setSelected] = React.useState<Map<string, FactorCategory>>(new Map());
-  const [when, setWhen] = React.useState<Date | null>(null);
+  const [when, setWhen] = React.useState<When>(WHEN_NOW);
   const [custom, setCustom] = React.useState('');
   const [customCategory, setCustomCategory] = React.useState<FactorCategory>('food');
   const [note, setNote] = React.useState('');
   const [saving, setSaving] = React.useState(false);
+  const timeMissing = resolveWhen(when) === null;
 
   const builtIn = new Set(FACTOR_GROUPS.flatMap(g => g.items.map(i => i.name.toLowerCase())));
   const yours = prefs.customFactors.filter(f => !builtIn.has(f.name.toLowerCase()));
@@ -287,16 +295,33 @@ function FactorFlow() {
     });
 
   const addCustom = () => {
-    const v = custom.trim();
+    const v = cleanName(custom);
     if (!v) return;
-    setSelected(prev => new Map(prev).set(v, customCategory));
+    const k = v.toLowerCase();
+    // A name that matches a chip on screen, in any case, selects that chip with its own spelling and category. The
+    // item then shows as selected, can be unselected, and is never saved twice or under the wrong category.
+    const existing =
+      FACTOR_GROUPS.flatMap(g => g.items).find(i => i.name.toLowerCase() === k) ??
+      yours.find(i => i.name.toLowerCase() === k);
+    setSelected(prev => {
+      const next = new Map(prev);
+      if (existing) next.set(existing.name, existing.category);
+      else next.set([...next.keys()].find(n => n.toLowerCase() === k) ?? v, customCategory);
+      return next;
+    });
     setCustom('');
   };
 
   const save = async () => {
     if (!selected.size) return;
+    // Work out the time now, so "1 hr ago" means an hour before Save was tapped.
+    const at = resolveWhen(when);
+    if (!at) {
+      toast.error('Please enter a valid date and time');
+      return;
+    }
     setSaving(true);
-    const ts = (when ?? new Date()).toISOString();
+    const ts = at.toISOString();
     const rows = [...selected.entries()].map(([name, category]) => ({
       id: newId(),
       name,
@@ -314,6 +339,7 @@ function FactorFlow() {
       });
       setSelected(new Map());
       setNote('');
+      setWhen(WHEN_NOW);
       afterFirstLog();
     } catch (e) {
       toast.error(errorMessage(e, 'Could not save. Please try again.'));
@@ -384,7 +410,7 @@ function FactorFlow() {
         </Select>
       </form>
 
-      <WhenPicker onChange={setWhen} />
+      <WhenPicker value={when} onChange={setWhen} />
 
       <div>
         <label htmlFor="factor-note" className="text-sm font-semibold text-fg mb-2 block">
@@ -400,14 +426,16 @@ function FactorFlow() {
       </div>
 
       <div className="sticky bottom-[calc(4.75rem+env(safe-area-inset-bottom))] pt-2 bg-gradient-to-t from-bg via-bg to-transparent">
-        <Button block size="lg" onClick={save} disabled={!selected.size || saving}>
+        <Button block size="lg" onClick={save} disabled={!selected.size || timeMissing || saving}>
           {saving
             ? 'Saving…'
             : selected.size === 0
               ? 'Pick at least one'
-              : selected.size === 1
-                ? 'Save 1 item'
-                : `Save ${selected.size} items`}
+              : timeMissing
+                ? 'Enter a date and time'
+                : selected.size === 1
+                  ? 'Save 1 item'
+                  : `Save ${selected.size} items`}
         </Button>
       </div>
     </div>

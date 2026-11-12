@@ -55,6 +55,11 @@
   --sev-2: #d39b1d;
   --sev-3: #e06c2b;
   --sev-4: #c4302b;
+  /* Text on a severity fill. Each pair is at least 4.5:1 (WCAG AA for normal text). */
+  --on-sev-1: #0f1c2a;
+  --on-sev-2: #0f1c2a;
+  --on-sev-3: #0f1c2a;
+  --on-sev-4: #ffffff;
 }
 
 .dark {
@@ -82,6 +87,10 @@
   --sev-2: #e0b03a;
   --sev-3: #ec864a;
   --sev-4: #ec5a52;
+  --on-sev-1: #0b1218;
+  --on-sev-2: #0b1218;
+  --on-sev-3: #0b1218;
+  --on-sev-4: #0b1218;
 }
 
 html {
