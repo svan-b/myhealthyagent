@@ -8,7 +8,11 @@ import { db } from '@/lib/db/client';
 import type { UserPreferences } from '@/lib/db/schema';
 import { useHealthData } from '@/lib/hooks/useHealthData';
 
-const RECHECK_MS = 24 * 60 * 60_000;
+/** A purchase still being confirmed. */
+export type PendingCheckout = NonNullable<UserPreferences['pendingCheckouts']>[number];
+
+/** How long a license answer counts before the app asks again. */
+export const RECHECK_MS = 24 * 60 * 60_000;
 const OFFLINE_GRACE_MS = 30 * 24 * 60 * 60_000;
 /** licenseCheckedAt is set to this when the server says a license no longer counts. */
 export const LICENSE_ENDED_AT = new Date(0).toISOString();
@@ -22,7 +26,7 @@ const retryDelay = (failures: number) => RETRY_DELAYS_MS[Math.min(Math.max(failu
 /** Showing the app again retries at most this often. */
 const MIN_RETRY_GAP_MS = 20_000;
 
-export type PendingCheckout = NonNullable<UserPreferences['pendingCheckout']>;
+const NO_PURCHASES: PendingCheckout[] = [];
 
 /**
  * none: no key on this device. active: confirmed by the server within the offline grace period.
@@ -91,7 +95,7 @@ export function usePro() {
 
   const startCheckout = React.useCallback(async () => {
     // Never start a second payment while an earlier one is still being confirmed.
-    if ((await db.getPreferences()).pendingCheckout) {
+    if ((await db.getPreferences()).pendingCheckouts) {
       throw new Error('Your purchase is still being confirmed. Pro will turn on automatically.');
     }
     const { url } = await post<{ url?: string }>('/api/checkout', {});
@@ -116,7 +120,8 @@ export function usePro() {
     hasKey: Boolean(prefs.licenseToken),
     licenseToken: prefs.licenseToken,
     licenseState: state,
-    pendingCheckout: prefs.pendingCheckout,
+    /** Purchases still being confirmed, oldest first. Usually none or one. */
+    pendingCheckouts: prefs.pendingCheckouts ?? NO_PURCHASES,
     startCheckout,
     activate,
     removeKey,
@@ -128,6 +133,8 @@ export function usePro() {
 export type LicenseCheck = 'valid' | 'ended' | 'error';
 
 const runningChecks = new Map<string, Promise<LicenseCheck>>();
+/** When the server last gave a definite answer about each key while the app was open. */
+const answeredAt = new Map<string, number>();
 
 /**
  * Asks the server whether a stored key still counts and records the answer. The answer is written
@@ -142,7 +149,13 @@ export function checkLicense(token: string): Promise<LicenseCheck> {
       const res = await post<{ valid?: unknown }>('/api/license', { token });
       if (typeof res.valid !== 'boolean') return 'error';
       const licenseCheckedAt = res.valid ? new Date().toISOString() : LICENSE_ENDED_AT;
-      await db.updatePreferences(cur => (cur.licenseToken === token ? { licenseCheckedAt } : null));
+      let stored = false;
+      await db.updatePreferences(cur => {
+        if (cur.licenseToken !== token) return null;
+        stored = true;
+        return { licenseCheckedAt };
+      });
+      if (stored) answeredAt.set(token, Date.now());
       return res.valid ? 'valid' : 'ended';
     } catch {
       return 'error';
@@ -150,6 +163,14 @@ export function checkLicense(token: string): Promise<LicenseCheck> {
   })().finally(() => runningChecks.delete(token));
   runningChecks.set(token, check);
   return check;
+}
+
+/**
+ * When the server last answered about a key: its stored check time, or a later answer while the app
+ * was open. An ended key keeps its 1970 check time, so only the second one says when it was asked.
+ */
+function lastAnswer(token: string, checkedAt: string | undefined): number {
+  return Math.max((checkedAt && Date.parse(checkedAt)) || 0, answeredAt.get(token) ?? 0);
 }
 
 /** Calls run when the device comes back online or the app is shown again. Returns a cleanup function. */
@@ -167,37 +188,55 @@ function onComeBack(run: () => void, lastTry: () => number) {
 }
 
 /**
- * Rechecks a stored license about once a day. A check that fails (offline, server or Stripe trouble)
- * keeps the cached result and is tried again when the device comes back online, when the app is shown
- * again, and on a back off timer. After a definite answer it is not asked again until the next start.
+ * Checks a stored license again once a day has passed since the server last answered: when the app
+ * starts, when it comes back to the foreground or online, and when it stays open in the foreground
+ * that long. Until then none of these sends anything. A check that fails (offline, server or Stripe
+ * trouble) keeps the cached result, so Pro keeps working for the offline grace period, and is tried
+ * again on a back off timer and on the same events.
  */
 export function useLicenseRefresh() {
   const { prefs, loading } = useHealthData();
   const token = prefs.licenseToken;
   const checkedAt = prefs.licenseCheckedAt;
-  const answered = React.useRef<string | null>(null);
   React.useEffect(() => {
-    if (!config.proEnabled || loading || !token || answered.current === token) return;
-    const last = checkedAt ? Date.parse(checkedAt) : 0;
-    if (Date.now() - last < RECHECK_MS) return;
+    if (!config.proEnabled || loading) return;
+    if (!token) {
+      // The key was removed. If it is stored again, from a backup say, it is checked again.
+      answeredAt.clear();
+      return;
+    }
     let stopped = false;
     let busy = false;
     let failures = 0;
     let lastTry = 0;
     let timer: ReturnType<typeof setTimeout> | undefined;
+    // If the app is still in the foreground when the next check is due, check then. A hidden app
+    // checks when it is shown again.
+    const later = (wait: number) => {
+      timer = setTimeout(
+        () => {
+          if (document.visibilityState === 'visible') void run();
+        },
+        Math.min(wait, RECHECK_MS),
+      );
+    };
     const run = async () => {
-      // A key the server already answered for can keep its date (an ended key stays at 1970), so this
-      // effect and its listeners can outlive the answer. They must not ask again.
-      if (stopped || busy || answered.current === token) return;
-      busy = true;
+      if (stopped || busy) return;
       clearTimeout(timer);
+      const wait = lastAnswer(token, checkedAt) + RECHECK_MS - Date.now();
+      if (wait > 0) return later(wait);
+      busy = true;
       lastTry = Date.now();
       const result = await checkLicense(token);
       busy = false;
-      if (result !== 'error') answered.current = token;
-      if (stopped || result !== 'error') return;
-      failures += 1;
-      timer = setTimeout(run, retryDelay(failures));
+      if (stopped) return;
+      if (result === 'error') {
+        failures += 1;
+        timer = setTimeout(run, retryDelay(failures));
+      } else {
+        failures = 0;
+        later(RECHECK_MS);
+      }
     };
     const stopListening = onComeBack(run, () => lastTry);
     void run();
@@ -217,7 +256,7 @@ export type ActivationOutcome =
   | { state: 'pending'; message: string }
   /** A final answer. The saved purchase is dropped. */
   | { state: 'failed'; message: string }
-  /** Nothing to do. This purchase was already activated, dropped or replaced. */
+  /** Nothing to do. This purchase is no longer saved: it was activated, dropped, dismissed or erased. */
   | { state: 'done' };
 
 const STILL_CONFIRMING = 'We could not confirm it yet. The app will keep trying automatically.';
@@ -225,19 +264,32 @@ const STILL_CONFIRMING = 'We could not confirm it yet. The app will keep trying 
 const runningCheckouts = new Map<string, Promise<ActivationOutcome>>();
 const lastCheckoutTry = new Map<string, number>();
 
-/** Saves the checkout Stripe returned with, before anything else, so activation can be retried until it works. */
+const isSaved = (prefs: Pick<UserPreferences, 'pendingCheckouts'>, sessionId: string) =>
+  Boolean(prefs.pendingCheckouts?.some(p => p.sessionId === sessionId));
+
+/** The saved purchases without this one. Undefined when none are left. */
+function without(list: PendingCheckout[] | undefined, sessionId: string): PendingCheckout[] | undefined {
+  const rest = (list ?? []).filter(p => p.sessionId !== sessionId);
+  return rest.length ? rest : undefined;
+}
+
+/**
+ * Saves a checkout Stripe returned with, before anything else, so activation can be retried until it
+ * works. Purchases saved earlier stay: a link with another checkout id, sent by someone or opened
+ * from an old return page, never replaces a purchase that is still being confirmed.
+ */
 export async function savePendingCheckout(sessionId: string): Promise<void> {
   await db.updatePreferences(cur =>
-    cur.pendingCheckout?.sessionId === sessionId
+    isSaved(cur, sessionId)
       ? null
-      : { pendingCheckout: { sessionId, since: new Date().toISOString() } },
+      : { pendingCheckouts: [...(cur.pendingCheckouts ?? []), { sessionId, since: new Date().toISOString() }] },
   );
 }
 
-/** Forgets a saved checkout, if it is still the saved one. */
+/** Forgets a saved checkout. Other saved purchases stay. */
 export async function forgetPendingCheckout(sessionId: string): Promise<void> {
   await db.updatePreferences(cur =>
-    cur.pendingCheckout?.sessionId === sessionId ? { pendingCheckout: undefined } : null,
+    isSaved(cur, sessionId) ? { pendingCheckouts: without(cur.pendingCheckouts, sessionId) } : null,
   );
 }
 
@@ -256,9 +308,8 @@ export function checkoutTriedRecently(sessionId: string, now = Date.now()): bool
 
 /**
  * Exchanges a saved checkout for a license key. Only one request per purchase runs at a time, and
- * callers that ask while it runs share its answer. Network trouble, server errors, rate limits and
- * payments that are still processing keep the purchase saved. Only an explicit refusal from the
- * server drops it. Never throws.
+ * callers that ask while it runs share its answer. What keeps the purchase saved and what drops it
+ * is up to finalAnswer below. Never throws.
  */
 export function finishCheckout(sessionId: string): Promise<ActivationOutcome> {
   const running = runningCheckouts.get(sessionId);
@@ -274,7 +325,7 @@ export function finishCheckout(sessionId: string): Promise<ActivationOutcome> {
 }
 
 async function runCheckout(sessionId: string): Promise<ActivationOutcome> {
-  if ((await db.getPreferences()).pendingCheckout?.sessionId !== sessionId) return { state: 'done' };
+  if (!isSaved(await db.getPreferences(), sessionId)) return { state: 'done' };
   let answer: Awaited<ReturnType<typeof request>>;
   try {
     answer = await request('/api/license', { sessionId });
@@ -284,16 +335,22 @@ async function runCheckout(sessionId: string): Promise<ActivationOutcome> {
   const { ok, status, data } = answer;
   const token = text(data.token);
   if (ok && data.valid === true && token) {
-    // A key that was paid for is always kept, even if the purchase was dismissed meanwhile.
-    await db.updatePreferences(cur => ({
-      licenseToken: token,
-      licenseCheckedAt: new Date().toISOString(),
-      pendingCheckout: cur.pendingCheckout?.sessionId === sessionId ? undefined : cur.pendingCheckout,
-    }));
-    return { state: 'active' };
+    // The key is stored only while the purchase is still saved, tested in the same transaction as the
+    // write. A purchase dismissed, or erased with Delete all data, while this answer was on its way
+    // stays gone, and its key with it.
+    let stored = false;
+    await db.updatePreferences(cur => {
+      if (!isSaved(cur, sessionId)) return null;
+      stored = true;
+      return {
+        licenseToken: token,
+        licenseCheckedAt: new Date().toISOString(),
+        pendingCheckouts: without(cur.pendingCheckouts, sessionId),
+      };
+    });
+    return stored ? { state: 'active' } : { state: 'done' };
   }
-  const final = data.valid === false && data.pending !== true && status !== 202 && status !== 429 && status < 500;
-  if (!final) {
+  if (!finalAnswer(status, data)) {
     return { state: 'pending', message: (status === 202 && text(data.reason)) || STILL_CONFIRMING };
   }
   await forgetPendingCheckout(sessionId);
@@ -301,19 +358,35 @@ async function runCheckout(sessionId: string): Promise<ActivationOutcome> {
 }
 
 /**
- * Keeps trying to turn a saved checkout into a license key until it works or gets a final answer:
- * when the app starts, when the device comes back online or the app is shown again, and on a back
- * off timer while it is open (for the first 14 days). onSettled hears about each final answer. Pass
- * a stable function.
+ * Whether an answer that did not activate a purchase is final, so the purchase is dropped.
+ *
+ * With Pro on, only an explicit refusal is. Server errors, rate limits and payments that are still
+ * processing are waited out, so a paid purchase is never lost to a passing problem.
+ *
+ * With Pro off there is nothing to unlock, and the server normally has no payments set up, so it
+ * answers 503. There the first answer from the server is final, unless it says the payment is still
+ * processing. This ends a purchase that only came from a link, which nothing on screen would show or
+ * let anyone dismiss. As in a Pro build, a request that got no answer at all, such as when offline,
+ * is tried again, which is also what lets the checkout return be tested end to end in a free build.
+ */
+function finalAnswer(status: number, data: Answer): boolean {
+  if (!config.proEnabled) return status !== 202;
+  return data.valid === false && data.pending !== true && status !== 202 && status !== 429 && status < 500;
+}
+
+/**
+ * Keeps trying to turn one saved checkout into a license key until it works or gets a final answer:
+ * right away, when the device comes back online or the app is shown again, and on a back off timer
+ * while the app is open (for the first 14 days). Call it once for each saved purchase. onSettled hears
+ * about the final answer. Pass a stable function.
  */
 export function usePendingCheckoutRetry(
+  pending: PendingCheckout,
   onSettled: (outcome: Extract<ActivationOutcome, { state: 'active' | 'failed' }>, sessionId: string) => void,
 ) {
-  const { prefs, loading } = useHealthData();
-  const sessionId = prefs.pendingCheckout?.sessionId;
-  const overdue = prefs.pendingCheckout ? pendingCheckoutOverdue(prefs.pendingCheckout) : false;
+  const { sessionId } = pending;
+  const overdue = pendingCheckoutOverdue(pending);
   React.useEffect(() => {
-    if (loading || !sessionId) return;
     let stopped = false;
     let busy = false;
     let failures = 0;
@@ -340,5 +413,5 @@ export function usePendingCheckoutRetry(
       clearTimeout(timer);
       stopListening();
     };
-  }, [loading, sessionId, overdue, onSettled]);
+  }, [sessionId, overdue, onSettled]);
 }

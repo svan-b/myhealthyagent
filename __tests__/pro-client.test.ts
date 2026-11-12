@@ -10,7 +10,7 @@ import { toast } from 'sonner';
 import { config } from '@/lib/config';
 import { db } from '@/lib/db/client';
 import { resetDBConnection } from '@/lib/db/init';
-import { HealthDataProvider } from '@/lib/hooks/useHealthData';
+import { HealthDataProvider, useHealthData } from '@/lib/hooks/useHealthData';
 import * as pro from '@/lib/pro/client';
 import { LicenseKeyForm, UpgradeCard } from '@/app/components/pro/Upgrade';
 import { announceActivation, supportText } from '@/app/components/pro/activation';
@@ -46,8 +46,10 @@ jest.mock('sonner', () => {
 
 const settings = config as { -readonly [K in keyof typeof config]: (typeof config)[K] };
 const PORTAL = 'https://billing.stripe.com/p/login/test_portal';
-const OLD_KEY = 'mha1.old.key';
-const NEW_KEY = 'mha1.new.key';
+// New keys for each test, because the app remembers answers about a key while it is open.
+let keys = 0;
+let OLD_KEY = '';
+let NEW_KEY = '';
 const SID = 'cs_live_a1b2c3d4e5f6g7h8';
 const EPOCH = new Date(0).toISOString();
 
@@ -74,10 +76,14 @@ let root: Root | null = null;
 let container: HTMLDivElement;
 
 beforeEach(() => {
+  keys += 1;
+  OLD_KEY = `mha1.old${keys}.key`;
+  NEW_KEY = `mha1.new${keys}.key`;
   resetDBConnection();
   globalThis.indexedDB = new IDBFactory();
   calls = [];
   respond = () => new TypeError('Failed to fetch');
+  settings.proEnabled = true;
   settings.billingPortalUrl = PORTAL;
   settings.supportEmail = 'help@example.com';
   jest.clearAllMocks();
@@ -87,13 +93,15 @@ afterEach(async () => {
   await act(async () => root?.unmount());
   root = null;
   container?.remove();
+  jest.useRealTimers();
 });
 
 const pause = (ms = 10) => act(async () => new Promise<void>(r => setTimeout(r, ms)));
 
 /** Waits inside act until check passes, then lets whatever was still running finish. */
 async function waitFor(check: () => boolean | Promise<boolean>, ms = 3000) {
-  const end = Date.now() + ms;
+  // performance.now, because some tests stop the Date clock.
+  const end = performance.now() + ms;
   for (;;) {
     let ok = false;
     await act(async () => {
@@ -101,9 +109,43 @@ async function waitFor(check: () => boolean | Promise<boolean>, ms = 3000) {
       await new Promise<void>(r => setTimeout(r, 10));
     });
     if (ok) return pause(20);
-    if (Date.now() > end) throw new Error('Timed out waiting');
+    if (performance.now() > end) throw new Error('Timed out waiting');
   }
 }
+
+/** Replaces only the Date clock. Timers stay real, so the database and React keep working. */
+function fakeClock(start: number) {
+  jest.useFakeTimers({
+    now: start,
+    doNotFake: [
+      'hrtime',
+      'nextTick',
+      'performance',
+      'queueMicrotask',
+      'requestAnimationFrame',
+      'cancelAnimationFrame',
+      'requestIdleCallback',
+      'cancelIdleCallback',
+      'setImmediate',
+      'clearImmediate',
+      'setInterval',
+      'clearInterval',
+      'setTimeout',
+      'clearTimeout',
+    ],
+  });
+  return (t: number) => jest.setSystemTime(t);
+}
+
+/** The app is shown again, or the device comes back online. */
+const show = () =>
+  act(async () => {
+    document.dispatchEvent(new Event('visibilitychange'));
+  });
+const online = () =>
+  act(async () => {
+    window.dispatchEvent(new Event('online'));
+  });
 
 async function render(ui: React.ReactNode) {
   container = document.createElement('div');
@@ -138,6 +180,25 @@ function Refresh() {
   return null;
 }
 
+type Settled = Parameters<typeof pro.usePendingCheckoutRetry>[1];
+
+/** Retries every saved purchase, the way AppShell does. */
+function Retries({ onSettled }: { onSettled: Settled }) {
+  const { prefs } = useHealthData();
+  return h(
+    React.Fragment,
+    null,
+    (prefs.pendingCheckouts ?? []).map(p => h(RetryOne, { key: p.sessionId, pending: p, onSettled })),
+  );
+}
+function RetryOne({ pending, onSettled }: { pending: pro.PendingCheckout; onSettled: Settled }) {
+  pro.usePendingCheckoutRetry(pending, onSettled);
+  return null;
+}
+
+/** Session ids of the purchases saved on the device, oldest first. */
+const saved = async () => ((await db.getPreferences()).pendingCheckouts ?? []).map(p => p.sessionId);
+
 describe('license checks', () => {
   it('a late answer about the old key does not turn off a key bought meanwhile (F14)', async () => {
     await db.updatePreferences({ licenseToken: OLD_KEY, licenseCheckedAt: EPOCH });
@@ -156,6 +217,8 @@ describe('license checks', () => {
     const prefs = await db.getPreferences();
     expect(prefs.licenseToken).toBe(NEW_KEY);
     expect(Date.parse(prefs.licenseCheckedAt!)).toBeGreaterThan(Date.now() - 60_000);
+    // Nobody asks again: not about the old key, and not about the new one, which was just confirmed.
+    expect(calls).toHaveLength(1);
   });
 
   it('retries a failed check when the device comes back online (F35)', async () => {
@@ -229,7 +292,7 @@ describe('finishing a checkout (F04, F44)', () => {
       respond = () => reply;
       const outcome = await pro.finishCheckout(SID);
       expect(outcome.state).toBe('pending');
-      expect((await db.getPreferences()).pendingCheckout?.sessionId).toBe(SID);
+      expect(await saved()).toEqual([SID]);
     }
     expect(await pro.finishCheckout(SID)).toEqual({ state: 'pending', message: 'Your payment is still processing.' });
 
@@ -237,7 +300,7 @@ describe('finishing a checkout (F04, F44)', () => {
     expect(await pro.finishCheckout(SID)).toEqual({ state: 'active' });
     const prefs = await db.getPreferences();
     expect(prefs.licenseToken).toBe(NEW_KEY);
-    expect(prefs.pendingCheckout).toBeUndefined();
+    expect(prefs.pendingCheckouts).toBeUndefined();
     expect(pro.licenseState(prefs)).toBe('active');
     expect(calls.every(c => c.sessionId === SID)).toBe(true);
   });
@@ -252,7 +315,7 @@ describe('finishing a checkout (F04, F44)', () => {
       state: 'failed',
       message: 'That checkout was not completed, so you were not charged.',
     });
-    expect((await db.getPreferences()).pendingCheckout).toBeUndefined();
+    expect((await db.getPreferences()).pendingCheckouts).toBeUndefined();
     // Nothing is left to do, and no request is sent.
     expect(await pro.finishCheckout(SID)).toEqual({ state: 'done' });
     expect(calls).toHaveLength(1);
@@ -262,14 +325,10 @@ describe('finishing a checkout (F04, F44)', () => {
     const sid = 'cs_live_retrywhenonline1';
     await pro.savePendingCheckout(sid);
     const settled = jest.fn();
-    function Retry() {
-      pro.usePendingCheckoutRetry(settled);
-      return null;
-    }
-    await render(h(Retry));
+    await render(h(Retries, { onSettled: settled }));
     await waitFor(() => calls.length === 1);
     expect(calls[0]).toEqual({ sessionId: sid });
-    expect((await db.getPreferences()).pendingCheckout?.sessionId).toBe(sid);
+    expect(await saved()).toEqual([sid]);
     expect(settled).not.toHaveBeenCalled();
 
     respond = () => ({ status: 200, body: { valid: true, token: NEW_KEY } });
@@ -278,7 +337,7 @@ describe('finishing a checkout (F04, F44)', () => {
     });
     await waitFor(async () => (await db.getPreferences()).licenseToken === NEW_KEY);
     expect(settled).toHaveBeenCalledWith({ state: 'active' }, sid);
-    expect((await db.getPreferences()).pendingCheckout).toBeUndefined();
+    expect((await db.getPreferences()).pendingCheckouts).toBeUndefined();
   });
 
   it('asks once when several callers try at the same time', async () => {
@@ -321,7 +380,7 @@ describe('finishing a checkout (F04, F44)', () => {
       expect(pro.finishCheckout(SID)).toBe(first);
       limits[0]();
       expect(await first).toEqual({ state: 'pending', message: expect.stringContaining('keep trying') });
-      expect((await db.getPreferences()).pendingCheckout?.sessionId).toBe(SID);
+      expect(await saved()).toEqual([SID]);
 
       // A license check that stalls is given up the same way.
       await db.updatePreferences({ licenseToken: OLD_KEY, licenseCheckedAt: '2026-01-01T00:00:00.000Z' });
@@ -398,12 +457,12 @@ describe('Pro screens', () => {
   });
 
   it('after two weeks without an answer the purchase can be dismissed, then bought again (F04)', async () => {
-    await db.updatePreferences({ pendingCheckout: { sessionId: SID, since: '2026-01-01T00:00:00.000Z' } });
+    await db.updatePreferences({ pendingCheckouts: [{ sessionId: SID, since: '2026-01-01T00:00:00.000Z' }] });
     await render(h(UpgradeCard));
     expect(text()).toContain('We could not confirm your Pro purchase');
     await click(button('Dismiss'));
     await waitFor(() => Boolean(button(/Get Pro, \$19 once/)));
-    expect((await db.getPreferences()).pendingCheckout).toBeUndefined();
+    expect((await db.getPreferences()).pendingCheckouts).toBeUndefined();
   });
 
   it('a key that could not be checked yet offers Check again instead of a buy button (F35)', async () => {
@@ -500,5 +559,289 @@ describe('Pro screens', () => {
       container.remove();
     }
     root = null;
+  });
+});
+
+describe('another checkout link while a purchase is being confirmed (P1)', () => {
+  // New ids for each test, because the app remembers recent attempts for each purchase.
+  let MINE = '';
+  let LINK = '';
+  beforeEach(() => {
+    MINE = `cs_live_mypurchase${keys}x000001`;
+    LINK = `cs_live_fromsomelink${keys}x0002`;
+  });
+
+  it('never replaces the saved purchase, and the new link is handled too', async () => {
+    await pro.savePendingCheckout(MINE);
+    // Offline: the purchase stays saved.
+    expect((await pro.finishCheckout(MINE)).state).toBe('pending');
+
+    // A link with another checkout id arrives, from someone else or an old return page.
+    await pro.savePendingCheckout(LINK);
+    respond = body =>
+      body.sessionId === LINK
+        ? { status: 200, body: { valid: false, reason: 'We could not find that purchase.' } }
+        : { status: 200, body: { valid: true, token: NEW_KEY } };
+    expect(await pro.finishCheckout(LINK)).toEqual({ state: 'failed', message: 'We could not find that purchase.' });
+
+    // The real purchase was kept and still activates.
+    expect(await pro.finishCheckout(MINE)).toEqual({ state: 'active' });
+    expect((await db.getPreferences()).licenseToken).toBe(NEW_KEY);
+    expect(calls).toEqual([{ sessionId: MINE }, { sessionId: LINK }, { sessionId: MINE }]);
+  });
+
+  it('keeps trying each saved purchase on its own until it settles', async () => {
+    await pro.savePendingCheckout(MINE);
+    await pro.savePendingCheckout(LINK);
+    await pro.savePendingCheckout(MINE);
+    expect(await saved()).toEqual([MINE, LINK]);
+
+    const settled = jest.fn();
+    respond = body =>
+      body.sessionId === LINK
+        ? { status: 200, body: { valid: false, reason: 'We could not find that purchase.' } }
+        : new TypeError('Failed to fetch');
+    await render(h(Retries, { onSettled: settled }));
+    await waitFor(() => calls.length === 2);
+    expect(settled).toHaveBeenCalledWith({ state: 'failed', message: 'We could not find that purchase.' }, LINK);
+    expect(await saved()).toEqual([MINE]);
+
+    respond = () => ({ status: 200, body: { valid: true, token: NEW_KEY } });
+    await online();
+    await waitFor(async () => (await db.getPreferences()).licenseToken === NEW_KEY);
+    expect(settled).toHaveBeenCalledWith({ state: 'active' }, MINE);
+    expect(await saved()).toEqual([]);
+    expect(calls.filter(c => c.sessionId === LINK)).toHaveLength(1);
+  });
+
+  it('shows a card for each purchase, and Retry finishes only its own', async () => {
+    await pro.savePendingCheckout(MINE);
+    await pro.savePendingCheckout(LINK);
+    await render(h(UpgradeCard));
+    expect(text().match(/Finishing your Pro purchase/g)).toHaveLength(2);
+    expect(text()).toContain(MINE);
+    expect(text()).toContain(LINK);
+    expect(button(/Get Pro/)).toBeUndefined();
+
+    respond = () => ({ status: 200, body: { valid: true, token: NEW_KEY } });
+    const retries = Array.from(container.querySelectorAll('button')).filter(b => b.textContent === 'Retry activation');
+    await click(retries[1]);
+    await waitFor(async () => (await db.getPreferences()).licenseToken === NEW_KEY);
+    expect(calls).toEqual([{ sessionId: LINK }]);
+    expect(await saved()).toEqual([MINE]);
+  });
+
+  it('a checkout reference pasted in the key box joins the saved purchases', async () => {
+    await pro.savePendingCheckout(MINE);
+    await render(h(LicenseKeyForm));
+    respond = body =>
+      body.sessionId === LINK
+        ? { status: 200, body: { valid: true, token: NEW_KEY } }
+        : new TypeError('Failed to fetch');
+    await type(container.querySelector('input'), LINK);
+    await click(button('Activate'));
+    await waitFor(async () => (await db.getPreferences()).licenseToken === NEW_KEY);
+    expect(calls).toEqual([{ sessionId: LINK }]);
+    expect(await saved()).toEqual([MINE]);
+  });
+
+  it('Delete all data names every purchase it would forget, or keeps them all', async () => {
+    for (const keep of [false, true]) {
+      resetDBConnection();
+      globalThis.indexedDB = new IDBFactory();
+      await pro.savePendingCheckout(MINE);
+      await pro.savePendingCheckout(LINK);
+      await render(h(DeleteSection, { onDone: () => {} }));
+      await click(button('Delete all data'));
+      expect(text()).toContain(
+        `The Pro purchases that are still being confirmed will be forgotten too. Their references are ${MINE} and ${LINK}.`,
+      );
+      if (keep) await click(container.querySelector<HTMLInputElement>('input[type=checkbox]')!);
+      expect(text()).toContain('Keep my Pro purchases on this device');
+      await type(container.querySelector<HTMLInputElement>('#confirm-delete'), 'DELETE');
+      await click(button('Delete'));
+      await waitFor(() => (toast.success as jest.Mock).mock.calls.length > 0);
+      expect(toast.success).toHaveBeenCalledWith(
+        keep ? 'All data deleted. Your Pro purchases were kept.' : 'All data deleted',
+      );
+      expect(await saved()).toEqual(keep ? [MINE, LINK] : []);
+      jest.clearAllMocks();
+      await act(async () => root?.unmount());
+      container.remove();
+    }
+    root = null;
+  });
+});
+
+describe('a purchase saved in a build with Pro off (P2)', () => {
+  it('the first answer from the server settles it, so nothing keeps running in the background', async () => {
+    settings.proEnabled = false;
+    await pro.savePendingCheckout(SID);
+    // No answer at all, as when offline: kept, and tried again later.
+    expect((await pro.finishCheckout(SID)).state).toBe('pending');
+    // The server of a free build answers that payments are not available. That is final here.
+    respond = () => ({ status: 503, body: { error: 'Payments are not available right now.' } });
+    expect(await pro.finishCheckout(SID)).toEqual({
+      state: 'failed',
+      message: 'We could not turn on Pro for this purchase.',
+    });
+    expect(await pro.finishCheckout(SID)).toEqual({ state: 'done' });
+    expect(calls).toHaveLength(2);
+  });
+});
+
+describe('an activation answer after the purchase was removed (P3)', () => {
+  async function answerAfter(remove: () => Promise<unknown>) {
+    await pro.savePendingCheckout(SID);
+    let answer!: (r: Reply) => void;
+    respond = () => new Promise<Reply>(r => (answer = r));
+    const attempt = pro.finishCheckout(SID);
+    await waitFor(() => calls.length === 1);
+    await remove();
+    answer({ status: 200, body: { valid: true, token: NEW_KEY } });
+    return attempt;
+  }
+
+  it('Delete all data stays deleted: the key does not come back', async () => {
+    expect(await answerAfter(() => db.deleteAllData())).toEqual({ state: 'done' });
+    const prefs = await db.getPreferences();
+    expect(prefs.licenseToken).toBeUndefined();
+    expect(prefs.licenseCheckedAt).toBeUndefined();
+  });
+
+  it('a dismissed purchase stays dismissed', async () => {
+    expect(await answerAfter(() => pro.forgetPendingCheckout(SID))).toEqual({ state: 'done' });
+    expect((await db.getPreferences()).licenseToken).toBeUndefined();
+  });
+
+  it('keeping the license on Delete all data keeps the purchase, so its key is stored', async () => {
+    expect(await answerAfter(() => db.deleteAllData({ keepLicense: true }))).toEqual({ state: 'active' });
+    expect((await db.getPreferences()).licenseToken).toBe(NEW_KEY);
+  });
+});
+
+describe('the daily license check while the app stays open (P5)', () => {
+  const DAY = 24 * 60 * 60_000;
+
+  it('checks again when the app is shown or comes online once a day has passed, and not before', async () => {
+    const start = Date.now();
+    const setNow = fakeClock(start);
+    await db.updatePreferences({ licenseToken: OLD_KEY, licenseCheckedAt: new Date(start - 60_000).toISOString() });
+    respond = () => ({ status: 200, body: { valid: true } });
+    await render(h(Refresh));
+    expect(calls).toHaveLength(0);
+
+    // Shown again and back online within the day: no request.
+    setNow(start + 6 * 60 * 60_000);
+    await show();
+    await online();
+    await pause(30);
+    expect(calls).toHaveLength(0);
+
+    // A day later the app comes back to the foreground.
+    setNow(start + DAY + 60_000);
+    await show();
+    await waitFor(() => calls.length === 1);
+    expect(Date.parse((await db.getPreferences()).licenseCheckedAt!)).toBe(start + DAY + 60_000);
+
+    // Answered: nothing more for another day.
+    await show();
+    await online();
+    await pause(30);
+    expect(calls).toHaveLength(1);
+
+    // The next day the subscription was canceled. Coming back online finds out.
+    respond = () => ({ status: 200, body: { valid: false, reason: 'This subscription has ended.' } });
+    setNow(start + 2 * DAY + 2 * 60_000);
+    await online();
+    await waitFor(() => calls.length === 2);
+    await waitFor(async () => (await db.getPreferences()).licenseCheckedAt === EPOCH);
+    expect(pro.licenseState(await db.getPreferences())).toBe('ended');
+
+    // An ended key keeps its 1970 date, and is still asked about only once a day.
+    setNow(start + 2 * DAY + 3 * 60 * 60_000);
+    await show();
+    await online();
+    await pause(30);
+    expect(calls).toHaveLength(2);
+    setNow(start + 3 * DAY + 3 * 60_000);
+    await show();
+    await waitFor(() => calls.length === 3);
+  });
+
+  it('an app left open in the foreground checks when the day is up, a hidden one when it is shown', async () => {
+    const start = Date.now();
+    const setNow = fakeClock(start);
+    // Catch the timer for the next daily check instead of waiting a day for it.
+    const realSetTimeout = global.setTimeout;
+    const daily: { fn: () => void; ms: number }[] = [];
+    const spy = jest.spyOn(global, 'setTimeout').mockImplementation(((fn: () => void, ms?: number) => {
+      if ((ms ?? 0) > 60 * 60_000) {
+        daily.push({ fn, ms: ms! });
+        return 0 as unknown as ReturnType<typeof setTimeout>;
+      }
+      return realSetTimeout(fn, ms);
+    }) as typeof setTimeout);
+    // Old timers belong to effects that have ended, and do nothing.
+    const timeUp = () =>
+      act(async () => {
+        for (const t of daily.splice(0)) t.fn();
+      });
+    let visibility: DocumentVisibilityState = 'visible';
+    Object.defineProperty(document, 'visibilityState', { configurable: true, get: () => visibility });
+    try {
+      await db.updatePreferences({
+        licenseToken: OLD_KEY,
+        licenseCheckedAt: new Date(start - 60 * 60_000).toISOString(),
+      });
+      respond = () => ({ status: 200, body: { valid: true } });
+      await render(h(Refresh));
+      expect(calls).toHaveLength(0);
+      expect(daily[daily.length - 1].ms).toBe(DAY - 60 * 60_000);
+
+      // The day passes with the app on screen the whole time.
+      setNow(start + DAY);
+      await timeUp();
+      await waitFor(() => calls.length === 1);
+
+      // The next day the app is in the background when the time comes. It waits until it is shown.
+      visibility = 'hidden';
+      setNow(start + 2 * DAY + 60_000);
+      await timeUp();
+      await pause(30);
+      expect(calls).toHaveLength(1);
+      visibility = 'visible';
+      await show();
+      await waitFor(() => calls.length === 2);
+    } finally {
+      spy.mockRestore();
+      delete (document as { visibilityState?: unknown }).visibilityState;
+    }
+  });
+
+  it('a check that fails keeps Pro through the 30 day grace period, and is tried again (P5)', async () => {
+    const start = Date.now();
+    const setNow = fakeClock(start);
+    const checked = new Date(start - 60_000).toISOString();
+    await db.updatePreferences({ licenseToken: OLD_KEY, licenseCheckedAt: checked });
+    await render(h(Refresh));
+
+    // Two days later the app is shown while offline.
+    setNow(start + 2 * DAY);
+    await show();
+    await waitFor(() => calls.length === 1);
+    let prefs = await db.getPreferences();
+    expect(prefs.licenseCheckedAt).toBe(checked);
+    expect(pro.licenseState(prefs)).toBe('active');
+    expect(pro.licenseState(prefs, start + 31 * DAY)).toBe('unverified');
+
+    // Back online: asked again straight away.
+    respond = () => ({ status: 200, body: { valid: true } });
+    setNow(start + 2 * DAY + 60 * 60_000);
+    await online();
+    await waitFor(() => calls.length === 2);
+    await waitFor(async () => (await db.getPreferences()).licenseCheckedAt !== checked);
+    prefs = await db.getPreferences();
+    expect(Date.parse(prefs.licenseCheckedAt!)).toBe(start + 2 * DAY + 60 * 60_000);
   });
 });

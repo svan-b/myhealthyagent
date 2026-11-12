@@ -58,6 +58,21 @@ function normalizeFactor(f: Factor): Factor {
   return { ...f, name, timestamp: new Date(f.timestamp).toISOString(), notes: cleanNote(f.notes) };
 }
 
+/**
+ * Purchases still being confirmed, oldest first. Also reads the single purchase the previous version
+ * saved as pendingCheckout. Malformed entries and repeats are dropped.
+ */
+function readPendingCheckouts(p: Record<string, unknown>): UserPreferences['pendingCheckouts'] {
+  const raw = [p.pendingCheckout, ...(Array.isArray(p.pendingCheckouts) ? p.pendingCheckouts : [])];
+  const list: NonNullable<UserPreferences['pendingCheckouts']> = [];
+  for (const item of raw) {
+    const { sessionId, since } = (item && typeof item === 'object' ? item : {}) as Record<string, unknown>;
+    if (typeof sessionId !== 'string' || typeof since !== 'string') continue;
+    if (!list.some(c => c.sessionId === sessionId)) list.push({ sessionId, since });
+  }
+  return list.length ? list : undefined;
+}
+
 /** Accepts preferences saved by any earlier version and fills gaps. */
 export function normalizePreferences(raw: unknown): UserPreferences {
   const p = (raw && typeof raw === 'object' ? raw : {}) as Record<string, unknown>;
@@ -65,10 +80,6 @@ export function normalizePreferences(raw: unknown): UserPreferences {
   const customFactors = Array.isArray(p.customFactors)
     ? (p.customFactors as UserPreferences['customFactors']).filter(f => f && typeof f.name === 'string')
     : [];
-  const pending = (p.pendingCheckout && typeof p.pendingCheckout === 'object' ? p.pendingCheckout : {}) as Record<
-    string,
-    unknown
-  >;
   return {
     ...DEFAULT_PREFERENCES,
     customSymptoms: strings(p.customSymptoms),
@@ -80,10 +91,7 @@ export function normalizePreferences(raw: unknown): UserPreferences {
     reportName: typeof p.reportName === 'string' ? p.reportName : undefined,
     licenseToken: typeof p.licenseToken === 'string' ? p.licenseToken : undefined,
     licenseCheckedAt: typeof p.licenseCheckedAt === 'string' ? p.licenseCheckedAt : undefined,
-    pendingCheckout:
-      typeof pending.sessionId === 'string' && typeof pending.since === 'string'
-        ? { sessionId: pending.sessionId, since: pending.since }
-        : undefined,
+    pendingCheckouts: readPendingCheckouts(p),
   };
 }
 
@@ -437,7 +445,8 @@ export const db = {
   // ----- Everything -----
   /**
    * Erases everything on this device, the Pro license key included. With keepLicense, which the
-   * person has to choose, the key, when it was last checked and a purchase still being confirmed stay.
+   * person has to choose, the key, when it was last checked and purchases still being confirmed stay.
+   * Without it, an activation that answers later finds its purchase gone and stores nothing.
    */
   async deleteAllData({ keepLicense = false }: { keepLicense?: boolean } = {}): Promise<void> {
     const idb = await initDB();
@@ -447,13 +456,13 @@ export const db = {
       ? normalizePreferences(await tx.objectStore('preferences').get('user-preferences'))
       : null;
     await Promise.all(names.map(n => tx.objectStore(n).clear()));
-    if (prefs && (prefs.licenseToken || prefs.pendingCheckout)) {
+    if (prefs && (prefs.licenseToken || prefs.pendingCheckouts)) {
       await tx.objectStore('preferences').put({
         ...DEFAULT_PREFERENCES,
         onboardedAt: prefs.onboardedAt,
         licenseToken: prefs.licenseToken,
         licenseCheckedAt: prefs.licenseCheckedAt,
-        pendingCheckout: prefs.pendingCheckout,
+        pendingCheckouts: prefs.pendingCheckouts,
       });
     }
     await tx.done;

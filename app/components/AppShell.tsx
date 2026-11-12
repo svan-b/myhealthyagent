@@ -18,6 +18,7 @@ import {
   savePendingCheckout,
   useLicenseRefresh,
   usePendingCheckoutRetry,
+  type PendingCheckout,
 } from '@/lib/pro/client';
 import { config } from '@/lib/config';
 import { cn } from '@/lib/utils';
@@ -83,6 +84,9 @@ function Shell() {
 
   return (
     <>
+      {prefs.pendingCheckouts?.map(p => (
+        <CheckoutRetry key={p.sessionId} pending={p} />
+      ))}
       <header className="sticky top-0 z-30 bg-bg/90 backdrop-blur border-b border-line safe-top">
         <div className="max-w-xl mx-auto px-4 h-14 flex items-center justify-between">
           <span className="flex items-center gap-2 font-bold text-fg">
@@ -156,9 +160,16 @@ function Shell() {
   );
 }
 
+/** Keeps trying to finish one saved purchase, and says when it is done. Renders nothing. */
+function CheckoutRetry({ pending }: { pending: PendingCheckout }) {
+  usePendingCheckoutRetry(pending, announceActivation);
+  return null;
+}
+
 /**
  * Finishes a Stripe Checkout redirect. The session id is saved on the device before the address is
- * cleaned, and the exchange for a license key is retried until it works or gets a final answer.
+ * cleaned, next to any purchase saved earlier, and CheckoutRetry keeps trying each one until it
+ * works or gets a final answer.
  */
 function useCheckoutReturn() {
   const done = React.useRef(false);
@@ -183,7 +194,6 @@ function useCheckoutReturn() {
     }, 0);
     return () => window.clearTimeout(timer);
   }, []);
-  usePendingCheckoutRetry(announceActivation);
 }
 
 async function returnFromCheckout(sessionId: string, cleanUrl: () => void) {

@@ -76,14 +76,14 @@ test('a purchase is saved before the address is cleaned and finished after a fai
   await expect(page.getByText('Thank you for your purchase. Finishing activation.')).toBeVisible();
   await expect(page.getByText('The app will keep trying automatically.')).toBeVisible();
   await expect(page).toHaveURL(/\/$/);
-  expect(await readPrefs(page)).toMatchObject({ pendingCheckout: { sessionId: SESSION } });
+  expect(await readPrefs(page)).toMatchObject({ pendingCheckouts: [{ sessionId: SESSION }] });
 
   // Next time the app opens it tries again, and this time it works.
   online = true;
   await page.reload();
   await expect(page.getByText('Thank you. Pro is active.')).toBeVisible();
   await expect.poll(async () => (await readPrefs(page)).licenseToken).toBe('mha1.e2e.key');
-  expect((await readPrefs(page)).pendingCheckout).toBeUndefined();
+  expect((await readPrefs(page)).pendingCheckouts).toBeUndefined();
   expect(bodies.length).toBeGreaterThanOrEqual(2);
   expect(bodies.every(b => JSON.stringify(b) === JSON.stringify({ sessionId: SESSION }))).toBe(true);
 });
@@ -100,7 +100,63 @@ test('a refused activation shows the reason, who to contact and the reference (F
   await expect(page.getByText('That checkout was not completed, so you were not charged.')).toBeVisible();
   await expect(page.getByText(`contact support and quote reference ${SESSION}`)).toBeVisible();
   await expect(page.getByText('Request failed')).toHaveCount(0);
-  await expect.poll(async () => (await readPrefs(page)).pendingCheckout).toBeUndefined();
+  await expect.poll(async () => (await readPrefs(page)).pendingCheckouts).toBeUndefined();
+});
+
+test('another checkout link does not replace a purchase that is still being confirmed (P1)', async ({ page }) => {
+  await startFresh(page);
+  const mine = 'cs_test_mypurchase0000000001';
+  const link = 'cs_test_fromsomelink00000002';
+  let mineConfirmed = false;
+  const asked: string[] = [];
+  await page.route('**/api/license', async route => {
+    const { sessionId } = route.request().postDataJSON() as { sessionId: string };
+    asked.push(sessionId);
+    if (sessionId === link) {
+      await route.fulfill({ json: { valid: false, reason: 'We could not find that purchase.' } });
+    } else if (mineConfirmed) {
+      await route.fulfill({ json: { valid: true, token: 'mha1.e2e.mine' } });
+    } else {
+      await route.abort('internetdisconnected');
+    }
+  });
+
+  await page.goto(`/?checkout=success&session_id=${mine}`);
+  await expect(page.getByText('The app will keep trying automatically.')).toBeVisible();
+
+  // Someone sends a link with another checkout id. It is handled, and the purchase stays saved.
+  await page.goto(`/?checkout=success&session_id=${link}`);
+  await expect(page.getByText('We could not find that purchase.')).toBeVisible();
+  await expect(page.getByText(`contact support and quote reference ${link}`)).toBeVisible();
+  await expect(page).toHaveURL(/\/$/);
+
+  // The purchase is confirmed later, and the app still finishes it.
+  mineConfirmed = true;
+  await page.reload();
+  await expect(page.getByText('Thank you. Pro is active.')).toBeVisible();
+  await expect.poll(async () => (await readPrefs(page)).licenseToken).toBe('mha1.e2e.mine');
+  expect(asked.filter(id => id === link)).toHaveLength(1);
+  expect(asked[asked.length - 1]).toBe(mine);
+});
+
+test('in the free build, the server saying payments are off ends a purchase from a link (P2)', async ({ page }) => {
+  await startFresh(page);
+  // No page.route here: the free build's own server answers, as it would for anyone.
+  const asked: unknown[] = [];
+  page.on('request', r => {
+    if (new URL(r.url()).pathname === '/api/license') asked.push(r.postDataJSON());
+  });
+  await page.goto(`/?checkout=success&session_id=${SESSION}`);
+  await expect(page.getByText('We could not turn on Pro for this purchase.')).toBeVisible();
+  await expect(page.getByText(`contact support and quote reference ${SESSION}`)).toBeVisible();
+  await expect.poll(async () => JSON.stringify(await readPrefs(page))).not.toContain(SESSION);
+
+  // Nothing is left to try: coming back online or opening the app again sends nothing more.
+  await page.evaluate(() => window.dispatchEvent(new Event('online')));
+  await page.reload();
+  await expect(page.getByRole('heading', { name: 'Log', exact: true })).toBeVisible();
+  await page.waitForTimeout(500);
+  expect(asked).toEqual([{ sessionId: SESSION }]);
 });
 
 test('a made up checkout link cannot put its own words in the toast (F04, F44)', async ({ page }) => {
@@ -115,7 +171,7 @@ test('a made up checkout link cannot put its own words in the toast (F04, F44)',
   await expect(page.getByText('If you were charged, contact support.')).toBeVisible();
   await expect(page.getByText(/URGENT/)).toHaveCount(0);
   await expect(page).toHaveURL(/\/$/);
-  expect((await readPrefs(page)).pendingCheckout).toBeUndefined();
+  expect((await readPrefs(page)).pendingCheckouts).toBeUndefined();
   expect(requests).toBe(0);
 });
 

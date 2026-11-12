@@ -250,7 +250,7 @@ export function ProSection() {
           </>
         ) : (
           <>
-            {pro.licenseState === 'ended' && !pro.pendingCheckout && (
+            {pro.licenseState === 'ended' && pro.pendingCheckouts.length === 0 && (
               <p className="text-sm rounded-xl bg-warn-soft text-warn px-3 py-2 font-medium">
                 {config.billingPortalUrl
                   ? 'Your Pro license is no longer active. Renew below or manage billing.'
@@ -374,7 +374,9 @@ export function DeleteSection({ onDone }: { onDone: () => void }) {
   const [keepChoice, setKeepChoice] = React.useState(false);
   const [busy, setBusy] = React.useState(false);
   const token = pro.licenseToken;
-  const hasLicense = Boolean(token || pro.pendingCheckout);
+  const pending = pro.pendingCheckouts;
+  const purchases = pending.length > 1 ? 'purchases' : 'purchase';
+  const hasLicense = Boolean(token) || pending.length > 0;
   const keepLicense = hasLicense && keepChoice;
   const erasingKey = Boolean(token) && !keepLicense;
 
@@ -403,10 +405,18 @@ export function DeleteSection({ onDone }: { onDone: () => void }) {
               </Button>
             </>
           )}
-          {pro.pendingCheckout && !keepLicense && (
+          {pending.length > 0 && !keepLicense && (
             <p className="text-sm text-muted">
-              The Pro purchase that is still being confirmed will be forgotten too. Its reference is{' '}
-              <span className="break-all font-mono text-[12px]">{pro.pendingCheckout.sessionId}</span>.
+              {pending.length > 1
+                ? 'The Pro purchases that are still being confirmed will be forgotten too. Their references are '
+                : 'The Pro purchase that is still being confirmed will be forgotten too. Its reference is '}
+              {pending.map((p, i) => (
+                <React.Fragment key={p.sessionId}>
+                  {i > 0 && (i === pending.length - 1 ? ' and ' : ', ')}
+                  <span className="break-all font-mono text-[12px]">{p.sessionId}</span>
+                </React.Fragment>
+              ))}
+              .
             </p>
           )}
           <label className="flex items-start gap-2 text-sm font-semibold text-fg">
@@ -416,7 +426,7 @@ export function DeleteSection({ onDone }: { onDone: () => void }) {
               checked={keepChoice}
               onChange={e => setKeepChoice(e.target.checked)}
             />
-            {token ? 'Keep my Pro license key on this device' : 'Keep my Pro purchase on this device'}
+            {token ? 'Keep my Pro license key on this device' : `Keep my Pro ${purchases} on this device`}
           </label>
           {keepLicense && token && (
             <p className="text-sm text-muted">
@@ -458,7 +468,7 @@ export function DeleteSection({ onDone }: { onDone: () => void }) {
                   ? 'All data deleted'
                   : token
                     ? 'All data deleted. Your Pro license key was kept.'
-                    : 'All data deleted. Your Pro purchase was kept.',
+                    : `All data deleted. Your Pro ${purchases} ${pending.length > 1 ? 'were' : 'was'} kept.`,
               );
               onDone();
             } catch (e) {

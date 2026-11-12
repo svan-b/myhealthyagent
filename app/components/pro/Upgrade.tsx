@@ -37,18 +37,28 @@ export function UpgradeCard({
   compact?: boolean;
 }) {
   const pro = usePro();
-  const waiting = pro.pendingCheckout || (pro.licenseState === 'unverified' && pro.licenseToken);
+  const pending = pro.pendingCheckouts;
+  const waiting = pending.length > 0 || (pro.licenseState === 'unverified' && pro.licenseToken);
   // The compact card sits above the Pro section in Reports and data, which shows the details.
   if (waiting && compact) {
     return (
       <p className="text-sm rounded-xl bg-accent-soft text-accent-ink px-3 py-2 font-medium">
-        {pro.pendingCheckout
+        {pending.length > 0
           ? 'Your Pro purchase is being confirmed. Details are under Pro below.'
           : 'We could not confirm your Pro license yet. Details are under Pro below.'}
       </p>
     );
   }
-  if (pro.pendingCheckout) return <PendingPurchase pending={pro.pendingCheckout} />;
+  // Usually one purchase. Each one gets its own card, with its own reference.
+  if (pending.length > 0) {
+    return (
+      <div className="space-y-3">
+        {pending.map(p => (
+          <PendingPurchase key={p.sessionId} pending={p} />
+        ))}
+      </div>
+    );
+  }
   if (pro.licenseState === 'unverified' && pro.licenseToken) return <UnverifiedLicense token={pro.licenseToken} />;
   return <BuyCard title={title} compact={compact} />;
 }
