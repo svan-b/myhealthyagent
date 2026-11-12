@@ -1,9 +1,18 @@
 // lib/analysis/patterns.ts
 // Descriptive patterns. These summarise what was logged; they make no causal claim.
+// Each pattern is shown only when an exact test says it would rarely turn up by chance. On logs
+// where nothing really differs, each kind of pattern appears in about 5% of cases or fewer.
 import type { Factor, Symptom } from '@/lib/db/schema';
-import { mean } from './stats';
+import { benjaminiHochberg, binomialUpperTail, mean } from './stats';
+import { fisherExactTwoSided, hypergeometricUpperTail, permutationTestTwoSided } from './exact';
 
 const DAY = 86_400_000;
+
+/**
+ * Chance level for each kind of pattern. A kind that can make two claims gives each half of it, and
+ * a kind that can name several symptoms controls the false discovery rate across them at this level.
+ */
+const ALPHA = 0.05;
 
 export interface PatternInsight {
   id: string;
@@ -26,6 +35,7 @@ const dayKey = (d: Date) =>
   `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
 const lower = (s: string) => s.toLowerCase();
 const plural = (n: number, word: string, many = `${word}s`) => `${n} ${n === 1 ? word : many}`;
+const pct = (x: number) => `${Math.round(x * 100)}%`;
 
 export function getReadiness(symptoms: Symptom[], factors: Factor[], now = new Date()): Readiness {
   const cutoff = now.getTime() - 90 * DAY;
@@ -77,148 +87,207 @@ export function getReadiness(symptoms: Symptom[], factors: Factor[], now = new D
   };
 }
 
+type Period = 'night' | 'morning' | 'afternoon' | 'evening';
+const periodOf = (hour: number): Period =>
+  hour < 5 ? 'night' : hour < 12 ? 'morning' : hour < 17 ? 'afternoon' : hour < 22 ? 'evening' : 'night';
+const during = (p: Period) => (p === 'night' ? 'at night' : `in the ${p}`);
+
+interface SymptomDays {
+  name: string;
+  days: Set<string>;
+}
+
+/** Days with any log in the last 60 days, and the days each symptom was logged on. */
+interface LoggedDays {
+  tracked: Set<string>;
+  bySymptom: SymptomDays[];
+}
+
+function lastSixtyDays(symptoms: Symptom[], factors: Factor[], now: Date): LoggedDays {
+  const cutoff = now.getTime() - 60 * DAY;
+  const tracked = new Set<string>();
+  const bySymptom = new Map<string, SymptomDays>();
+  for (const f of factors) {
+    const t = Date.parse(f.timestamp);
+    if (t >= cutoff) tracked.add(dayKey(new Date(t)));
+  }
+  for (const s of symptoms) {
+    const t = Date.parse(s.timestamp);
+    if (!(t >= cutoff)) continue;
+    const k = dayKey(new Date(t));
+    tracked.add(k);
+    const g = bySymptom.get(lower(s.name)) ?? { name: s.name, days: new Set<string>() };
+    g.days.add(k);
+    bySymptom.set(lower(s.name), g);
+  }
+  return { tracked, bySymptom: [...bySymptom.values()] };
+}
+
 function timeOfDay(symptoms: Symptom[]): PatternInsight[] {
+  // Each symptom counts at most one start per part of each day, so logging a symptom again while it
+  // lasts does not count twice. A night that runs past midnight belongs to the day it began.
+  const groups = new Map<string, { name: string; starts: Set<string> }>();
+  for (const s of symptoms) {
+    const d = new Date(s.timestamp);
+    const h = d.getHours();
+    if (Number.isNaN(h)) continue;
+    const day = dayKey(h < 5 ? new Date(d.getFullYear(), d.getMonth(), d.getDate() - 1) : d);
+    const g = groups.get(lower(s.name)) ?? { name: s.name, starts: new Set<string>() };
+    g.starts.add(`${day}|${periodOf(h)}`);
+    groups.set(lower(s.name), g);
+  }
+  const tested = [...groups.values()]
+    .filter(g => g.starts.size >= 8)
+    .map(g => {
+      const counts: Record<Period, number> = { night: 0, morning: 0, afternoon: 0, evening: 0 };
+      for (const k of g.starts) counts[k.slice(k.indexOf('|') + 1) as Period]++;
+      const [period, count] = (Object.entries(counts) as [Period, number][]).sort((a, b) => b[1] - a[1])[0];
+      const n = g.starts.size;
+      // With no usual time, the morning, afternoon and evening would each get about a third of the
+      // starts, and the night, when most people sleep, fewer. So this is about the chance that some
+      // part of the day gets `count` or more by chance alone.
+      const p = Math.min(1, 3 * binomialUpperTail(count, n, 1 / 3));
+      return { name: g.name, period, count, n, p };
+    });
+  const q = benjaminiHochberg(tested.map(t => t.p));
+  return tested
+    .filter((t, i) => t.count * 2 > t.n && q[i] <= ALPHA)
+    .map(t => ({
+      id: `tod-${lower(t.name)}`,
+      kind: 'time-of-day',
+      title: `${t.name} usually starts ${during(t.period)}`,
+      detail: `It began ${during(t.period)} ${plural(t.count, 'time')} out of ${t.n}.`,
+    }));
+}
+
+function weekday({ tracked, bySymptom }: LoggedDays): PatternInsight[] {
+  const weekend: string[] = [];
+  const weekdays: string[] = [];
+  for (const k of tracked) ([0, 6].includes(new Date(`${k}T12:00:00`).getDay()) ? weekend : weekdays).push(k);
+  if (weekend.length < 4 || weekdays.length < 10) return [];
+
+  const withSymptoms = (d: string) => bySymptom.some(g => g.days.has(d));
+  const we = weekend.filter(withSymptoms).length;
+  const wd = weekdays.filter(withSymptoms).length;
+  const weShare = we / weekend.length;
+  const wdShare = wd / weekdays.length;
+  if (Math.abs(weShare - wdShare) < 0.25) return [];
+  // Two sided, because a difference either way would be reported.
+  if (fisherExactTwoSided(we, weekend.length - we, wd, weekdays.length - wd) >= ALPHA) return [];
+  const worse = weShare > wdShare ? 'weekends' : 'weekdays';
+  return [
+    {
+      id: 'weekday',
+      kind: 'weekday',
+      title: `Symptoms show up more on ${worse}`,
+      detail: `In the last 60 days you logged symptoms on ${wd} of ${weekdays.length} tracked weekdays (${pct(wdShare)}) and ${we} of ${weekend.length} tracked weekend days (${pct(weShare)}).`,
+    },
+  ];
+}
+
+function trend(symptoms: Symptom[], factors: Factor[], now: Date): PatternInsight[] {
+  // Compare whole calendar days, the last 14 including today against the 14 before them. Days are
+  // the unit, so several logs on one bad day count once.
+  const fortnight = (back: number) =>
+    new Set(
+      Array.from({ length: 14 }, (_, i) =>
+        dayKey(new Date(now.getFullYear(), now.getMonth(), now.getDate() - back - i)),
+      ),
+    );
+  const halves = [fortnight(0), fortnight(14)].map(keys => ({
+    keys,
+    tracked: new Set<string>(),
+    /** Worst severity on each day with a symptom, the same measure as the daily chart. */
+    worst: new Map<string, number>(),
+  }));
+  const [recent, prior] = halves;
+  const from = new Date(now.getFullYear(), now.getMonth(), now.getDate() - 27).getTime();
+  const place = (timestamp: string) => {
+    const t = Date.parse(timestamp);
+    if (!(t >= from && t <= now.getTime())) return null;
+    const k = dayKey(new Date(t));
+    const half = halves.find(x => x.keys.has(k));
+    if (half) half.tracked.add(k);
+    return half ? { half, k } : null;
+  };
+  for (const f of factors) place(f.timestamp);
+  for (const s of symptoms) {
+    const at = place(s.timestamp);
+    if (at) at.half.worst.set(at.k, Math.max(at.half.worst.get(at.k) ?? 0, s.severity));
+  }
+  if (recent.tracked.size < 7 || prior.tracked.size < 7) return [];
   const out: PatternInsight[] = [];
-  const groups = new Map<string, Symptom[]>();
-  for (const s of symptoms) groups.set(lower(s.name), [...(groups.get(lower(s.name)) ?? []), s]);
-  for (const list of groups.values()) {
-    if (list.length < 8) continue;
-    const buckets = { night: 0, morning: 0, afternoon: 0, evening: 0 };
-    for (const s of list) {
-      const h = new Date(s.timestamp).getHours();
-      buckets[h < 5 ? 'night' : h < 12 ? 'morning' : h < 17 ? 'afternoon' : h < 22 ? 'evening' : 'night']++;
-    }
-    const [period, count] = Object.entries(buckets).sort((a, b) => b[1] - a[1])[0];
-    if (count / list.length >= 0.5) {
-      const name = list[0].name;
+
+  // Share of tracked days with any symptom, tested with a two sided Fisher exact test.
+  const r = recent.worst.size;
+  const rDays = recent.tracked.size;
+  const p = prior.worst.size;
+  const pDays = prior.tracked.size;
+  const rShare = r / rDays;
+  const pShare = p / pDays;
+  const bigChange = pShare === 0 ? rShare > 0 : Math.abs(rShare - pShare) / pShare >= 0.3;
+  if (bigChange && fisherExactTwoSided(r, rDays - r, p, pDays - p) < ALPHA / 2) {
+    out.push({
+      id: 'trend-frequency',
+      kind: 'trend',
+      title: rShare < pShare ? 'Fewer symptoms in the last two weeks' : 'More symptoms in the last two weeks',
+      detail: `You logged symptoms on ${r} of ${rDays} tracked days in the last two weeks, compared with ${p} of ${pDays} in the two weeks before.`,
+    });
+  }
+
+  // Worst severity on days with symptoms, tested with an exact two sided permutation test.
+  const rVals = [...recent.worst.values()];
+  const pVals = [...prior.worst.values()];
+  if (rVals.length >= 5 && pVals.length >= 5) {
+    const rSev = mean(rVals);
+    const pSev = mean(pVals);
+    if (Math.abs(rSev - pSev) >= 1 && permutationTestTwoSided(rVals, pVals) < ALPHA / 2) {
       out.push({
-        id: `tod-${lower(name)}`,
-        kind: 'time-of-day',
-        title: `${name} usually starts in the ${period}`,
-        detail: `${count} of ${list.length} logged ${lower(name)} entries began in the ${period}.`,
+        id: 'trend-severity',
+        kind: 'trend',
+        title: rSev < pSev ? 'Symptoms have been milder lately' : 'Symptoms have been more severe lately',
+        detail: `On days with symptoms, the worst severity averaged ${rSev.toFixed(1)} out of 10 in the last two weeks, compared with ${pSev.toFixed(1)} in the two weeks before.`,
       });
     }
   }
   return out;
 }
 
-function weekday(symptoms: Symptom[], factors: Factor[], now: Date): PatternInsight[] {
-  const cutoff = now.getTime() - 60 * DAY;
-  const active = new Set<string>();
-  for (const e of [...symptoms, ...factors]) {
-    const t = Date.parse(e.timestamp);
-    if (t >= cutoff) active.add(dayKey(new Date(t)));
-  }
-  const weekend = [...active].filter(k => [0, 6].includes(new Date(`${k}T12:00:00`).getDay()));
-  const weekdays = [...active].filter(k => ![0, 6].includes(new Date(`${k}T12:00:00`).getDay()));
-  if (weekend.length < 4 || weekdays.length < 10) return [];
-
-  const sevByDay = new Map<string, number[]>();
-  for (const s of symptoms) {
-    const t = Date.parse(s.timestamp);
-    if (t < cutoff) continue;
-    const k = dayKey(new Date(t));
-    sevByDay.set(k, [...(sevByDay.get(k) ?? []), s.severity]);
-  }
-  const share = (days: string[]) => days.filter(d => sevByDay.has(d)).length / days.length;
-  const we = share(weekend);
-  const wd = share(weekdays);
-  if (Math.abs(we - wd) < 0.25) return [];
-  const worse = we > wd ? 'weekends' : 'weekdays';
-  return [
-    {
-      id: 'weekday',
-      kind: 'weekday',
-      title: `Symptoms show up more on ${worse}`,
-      detail: `You logged symptoms on ${Math.round(wd * 100)}% of tracked weekdays and ${Math.round(we * 100)}% of tracked weekend days over the last 60 days.`,
-    },
-  ];
-}
-
-function trend(symptoms: Symptom[], factors: Factor[], now: Date): PatternInsight[] {
-  const t0 = now.getTime();
-  const inRange = (t: number, from: number, to: number) => t > t0 - from * DAY && t <= t0 - to * DAY;
-  const activeDays = (from: number, to: number) => {
-    const set = new Set<string>();
-    for (const e of [...symptoms, ...factors]) {
-      const t = Date.parse(e.timestamp);
-      if (inRange(t, from, to)) set.add(dayKey(new Date(t)));
-    }
-    return set.size;
-  };
-  const recentDays = activeDays(14, 0);
-  const priorDays = activeDays(28, 14);
-  if (recentDays < 7 || priorDays < 7) return [];
-  const recent = symptoms.filter(s => inRange(Date.parse(s.timestamp), 14, 0));
-  const prior = symptoms.filter(s => inRange(Date.parse(s.timestamp), 28, 14));
-  if (recent.length + prior.length < 10) return [];
-
-  const rRate = recent.length / recentDays;
-  const pRate = prior.length / priorDays;
-  const rSev = mean(recent.map(s => s.severity));
-  const pSev = mean(prior.map(s => s.severity));
-  const out: PatternInsight[] = [];
-
-  if (pRate > 0 && Math.abs(rRate - pRate) / pRate >= 0.3) {
-    const better = rRate < pRate;
-    out.push({
-      id: 'trend-frequency',
-      kind: 'trend',
-      title: better ? 'Fewer symptoms in the last two weeks' : 'More symptoms in the last two weeks',
-      detail: `${rRate.toFixed(1)} per tracked day recently, compared with ${pRate.toFixed(1)} in the two weeks before.`,
-    });
-  }
-  if (recent.length >= 5 && prior.length >= 5 && Math.abs(rSev - pSev) >= 1) {
-    const better = rSev < pSev;
-    out.push({
-      id: 'trend-severity',
-      kind: 'trend',
-      title: better ? 'Symptoms have been milder lately' : 'Symptoms have been more severe lately',
-      detail: `Average severity ${rSev.toFixed(1)} out of 10 in the last two weeks, compared with ${pSev.toFixed(1)} before.`,
-    });
-  }
-  return out;
-}
-
-function together(symptoms: Symptom[], now: Date): PatternInsight[] {
-  const cutoff = now.getTime() - 60 * DAY;
-  const daysBySymptom = new Map<string, { name: string; days: Set<string> }>();
-  for (const s of symptoms) {
-    const t = Date.parse(s.timestamp);
-    if (t < cutoff) continue;
-    const k = lower(s.name);
-    const g = daysBySymptom.get(k) ?? { name: s.name, days: new Set<string>() };
-    g.days.add(dayKey(new Date(t)));
-    daysBySymptom.set(k, g);
-  }
-  const list = [...daysBySymptom.values()].filter(g => g.days.size >= 3);
-  const out: PatternInsight[] = [];
+function together(logged: LoggedDays): PatternInsight[] {
+  const tracked = logged.tracked.size;
+  const list = logged.bySymptom.filter(g => g.days.size >= 3);
+  const pairs: { rare: SymptomDays; common: SymptomDays; both: number; p: number }[] = [];
   for (let i = 0; i < list.length; i++) {
     for (let j = i + 1; j < list.length; j++) {
-      const a = list[i];
-      const b = list[j];
-      const both = [...a.days].filter(d => b.days.has(d)).length;
-      const smaller = Math.min(a.days.size, b.days.size);
-      if (both >= 3 && both / smaller >= 0.6) {
-        out.push({
-          id: `together-${lower(a.name)}-${lower(b.name)}`,
-          kind: 'together',
-          title: `${a.name} and ${lower(b.name)} tend to happen on the same day`,
-          detail: `They were both logged on ${plural(both, 'day')} out of ${smaller} days with the less frequent one.`,
-        });
-      }
+      const [rare, common] = list[i].days.size <= list[j].days.size ? [list[i], list[j]] : [list[j], list[i]];
+      const both = [...rare.days].filter(d => common.days.has(d)).length;
+      // Chance of this much overlap or more if the two came and went independently of each other.
+      // A symptom logged on most days overlaps with everything, and this accounts for that.
+      const p = hypergeometricUpperTail(both, tracked, common.days.size, rare.days.size);
+      pairs.push({ rare, common, both, p });
     }
   }
-  return out.slice(0, 3);
+  // Every pair counts as a comparison, so having many symptoms does not make chance pairs likely.
+  const q = benjaminiHochberg(pairs.map(x => x.p));
+  return pairs
+    .filter((x, i) => x.both >= 3 && q[i] <= ALPHA)
+    .sort((a, b) => a.p - b.p || b.both - a.both)
+    .slice(0, 3)
+    .map(({ rare, common, both }) => {
+      const otherDays = tracked - rare.days.size;
+      const commonOnly = common.days.size - both;
+      return {
+        id: `together-${lower(rare.name)}-${lower(common.name)}`,
+        kind: 'together',
+        title: `${rare.name} and ${lower(common.name)} tend to happen on the same day`,
+        detail: `${common.name} was logged on ${both} of the ${rare.days.size} days with ${lower(rare.name)} (${pct(both / rare.days.size)}), compared with ${commonOnly} of ${otherDays} other tracked days (${pct(otherDays ? commonOnly / otherDays : 0)}).`,
+      };
+    });
 }
 
 export function getPatterns(symptoms: Symptom[], factors: Factor[], now = new Date()): PatternInsight[] {
-  return [
-    ...trend(symptoms, factors, now),
-    ...timeOfDay(symptoms),
-    ...weekday(symptoms, factors, now),
-    ...together(symptoms, now),
-  ];
+  const logged = lastSixtyDays(symptoms, factors, now);
+  return [...trend(symptoms, factors, now), ...timeOfDay(symptoms), ...weekday(logged), ...together(logged)];
 }
 
 export interface DailyPoint {
@@ -254,7 +323,13 @@ export function dailySeries(symptoms: Symptom[], days = 30, now = new Date()): D
 export interface SymptomSummary {
   name: string;
   count: number;
+  /** Mean of the logged ratings. Use it only where the text says it is an average. */
   avgSeverity: number;
+  /**
+   * Middle logged rating (the higher of the two middle ones when the count is even), so it is
+   * always a level the person actually chose. Use it for "typical" or "usually".
+   */
+  typicalSeverity: number;
   maxSeverity: number;
   days: number;
 }
@@ -263,12 +338,16 @@ export function summarizeSymptoms(symptoms: Symptom[]): SymptomSummary[] {
   const groups = new Map<string, Symptom[]>();
   for (const s of symptoms) groups.set(lower(s.name), [...(groups.get(lower(s.name)) ?? []), s]);
   return [...groups.values()]
-    .map(list => ({
-      name: list[0].name,
-      count: list.length,
-      avgSeverity: Number(mean(list.map(s => s.severity)).toFixed(1)),
-      maxSeverity: Math.max(...list.map(s => s.severity)),
-      days: new Set(list.map(s => dayKey(new Date(s.timestamp)))).size,
-    }))
+    .map(list => {
+      const sevs = list.map(s => s.severity).sort((a, b) => a - b);
+      return {
+        name: list[0].name,
+        count: list.length,
+        avgSeverity: Number(mean(sevs).toFixed(1)),
+        typicalSeverity: sevs[Math.floor(sevs.length / 2)],
+        maxSeverity: Math.max(...sevs),
+        days: new Set(list.map(s => dayKey(new Date(s.timestamp)))).size,
+      };
+    })
     .sort((a, b) => b.count - a.count);
 }
